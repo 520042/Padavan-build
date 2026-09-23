@@ -22,14 +22,14 @@ jobs:
         cd /opt/rt-n56u/toolchain-mipsel && sh dl_toolchain.sh
         mkdir -p /opt/images/
 
-    - name: Download clash
+    - name: Download mihomo core
       run: |
-        curl -kL -o /tmp/clash.gz "https://github.com/Dreamacro/clash/releases/download/v1.18.0/clash-linux-mipsle-softfloat-v1.18.0.gz"
-        gunzip -f /tmp/clash.gz
-        chmod +x /tmp/clash
-        upx --best /tmp/clash -o /tmp/clash-upx || cp /tmp/clash /tmp/clash-upx
+        curl -kL -o /tmp/mihomo.gz "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-mipsle-softfloat-v1.19.31.gz"
+        gunzip -f /tmp/mihomo.gz
+        chmod +x /tmp/mihomo
+        upx --best /tmp/mihomo -o /tmp/mihomo-upx || cp /tmp/mihomo /tmp/mihomo-upx
         mkdir -p /opt/rt-n56u/trunk/user/usr/bin
-        cp /tmp/clash-upx /opt/rt-n56u/trunk/user/usr/bin/clash
+        cp /tmp/mihomo-upx /opt/rt-n56u/trunk/user/usr/bin/clash
         chmod +x /opt/rt-n56u/trunk/user/usr/bin/clash
         ls -la /opt/rt-n56u/trunk/user/usr/bin/clash
 
