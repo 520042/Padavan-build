@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v4
 
     - name: Init
       env:
@@ -22,35 +22,31 @@ jobs:
         cd /opt/rt-n56u/toolchain-mipsel && sh dl_toolchain.sh
         mkdir -p /opt/images/
 
-    - name: Download clash core (Dreamacro/clash v1.18.0, ~4MB)
+    - name: Download clash core
       run: |
         curl -kL -o /tmp/clash.gz "https://github.com/Dreamacro/clash/releases/download/v1.18.0/clash-linux-mipsle-softfloat-v1.18.0.gz"
         gunzip -f /tmp/clash.gz
         chmod +x /tmp/clash
-        ls -la /tmp/clash
-        echo "Clash size before UPX: $(du -h /tmp/clash | cut -f1)"
         upx --best /tmp/clash -o /tmp/clash-upx || cp /tmp/clash /tmp/clash-upx
-        echo "Clash size after UPX: $(du -h /tmp/clash-upx | cut -f1)"
+        ls -la /tmp/clash-upx
 
     - name: Download yacd dashboard
       run: |
-        curl -kL -o /tmp/yacd.tar.gz "https://gh.ddlc.top/https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
-        # yacd is tar.xz, extract and repack as tar.gz
-        cd /tmp && tar xf yacd.tar.gz && tar czf yacd-ui.tar.gz -C public . && ls -la yacd-ui.tar.gz
+        curl -kL -o /tmp/yacd.tar.xz "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
+        cd /tmp && tar xf yacd.tar.xz && ls -la public/
 
-    - name: Inject clash into firmware rootfs
+    - name: Prepare custom files
       run: |
-        # Padavan custom files go to trunk/user/ which gets copied to rootfs
         mkdir -p /opt/rt-n56u/trunk/user/usr/bin
         mkdir -p /opt/rt-n56u/trunk/user/etc/clash/ui
-        # clash binary
+        mkdir -p /opt/rt-n56u/trunk/user/etc/storage
         cp /tmp/clash-upx /opt/rt-n56u/trunk/user/usr/bin/clash
         chmod +x /opt/rt-n56u/trunk/user/usr/bin/clash
-        # dashboard
-        tar xzf /tmp/yacd-ui.tar.gz -C /opt/rt-n56u/trunk/user/etc/clash/ui/
-        # config
-        cat > /opt/rt-n56u/trunk/user/etc/clash/config.yaml << 'CLASHCONF'
-# 鐢典俊 WAP 鍏嶆祦 - DIRECT 閫忔槑浠ｇ悊
+        cp -r /tmp/public/* /opt/rt-n56u/trunk/user/etc/clash/ui/
+
+    - name: Write config.yaml
+      run: |
+        cat > /opt/rt-n56u/trunk/user/etc/clash/config.yaml << 'EOF'
 mixed-port: 7890
 redir-port: 7891
 allow-lan: true
@@ -60,8 +56,7 @@ log-level: info
 ipv6: false
 external-controller: 0.0.0.0:9090
 secret: ""
-external-ui: /etc/clash/ui
-
+external-ui: /etc/storage/clash/ui
 dns:
   enable: true
   listen: 0.0.0.0:1053
@@ -71,95 +66,73 @@ dns:
     - 119.29.29.29
   nameserver:
     - https://223.5.5.5/dns-query
-    - https://1.12.12.12/dns-query
-
 rules:
   - MATCH,DIRECT
-CLASHCONF
-        # start script
-        cat > /opt/rt-n56u/trunk/user/etc/clash/start.sh << 'STARTSSH'
-#!/bin/sh
-# Clash 鍚姩鑴氭湰 - 鐢典俊WAP鍏嶆祦閫忔槑浠ｇ悊
-CLASH_DIR=/etc/storage/clash
+EOF
 
-# 棣栨杩愯锛氫粠鍙鏍规枃浠剁郴缁熷鍒跺埌鍙啓鍒嗗尯
+    - name: Write start.sh
+      run: |
+        cat > /opt/rt-n56u/trunk/user/etc/clash/start.sh << 'EOF'
+#!/bin/sh
+CLASH_DIR=/etc/storage/clash
 mkdir -p $CLASH_DIR
 [ ! -f $CLASH_DIR/config.yaml ] && cp /etc/clash/config.yaml $CLASH_DIR/
 [ ! -d $CLASH_DIR/ui ] && cp -r /etc/clash/ui $CLASH_DIR/
-
-# 鏇存柊閰嶇疆涓殑 external-ui 璺緞鎸囧悜鍙啓鍒嗗尯
-sed -i 's|external-ui:.*|external-ui: /etc/storage/clash/ui|' $CLASH_DIR/config.yaml
-
-# 鍚姩 clash
 killall clash 2>/dev/null
 sleep 1
 cd $CLASH_DIR
 nohup /usr/bin/clash -d . -f config.yaml > clash.log 2>&1 &
-echo "[clash] started, pid=$(pidof clash)"
-
 sleep 3
-
-# iptables 閫忔槑浠ｇ悊
 iptables -t nat -N CLASH 2>/dev/null
 iptables -t nat -F CLASH
 iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
 iptables -t nat -A PREROUTING -j CLASH
-# 鏀捐绉佹湁缃戞
 iptables -t nat -A CLASH -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A CLASH -d 10.0.0.0/8 -j RETURN
 iptables -t nat -A CLASH -d 172.16.0.0/12 -j RETURN
-# TCP 閲嶅畾鍚?iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891
-# DNS 閲嶅畾鍚?iptables -t nat -A CLASH -p udp --dport 53 -j REDIRECT --to-ports 1053
-echo "[clash] iptables transparent proxy configured"
-echo "[clash] Dashboard: http://192.168.2.1:9090/ui/"
-STARTSSH
+iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891
+iptables -t nat -A CLASH -p udp --dport 53 -j REDIRECT --to-ports 1053
+echo "clash started, dashboard http://192.168.2.1:9090/ui/"
+EOF
         chmod +x /opt/rt-n56u/trunk/user/etc/clash/start.sh
 
-        # 寮€鏈鸿嚜鍚剼鏈紙鍐欏叆 /etc/storage/startup.sh 鐨勯粯璁ゅ唴瀹癸級
-        mkdir -p /opt/rt-n56u/trunk/user/etc/storage
-        cat > /opt/rt-n56u/trunk/user/etc/storage/startup.sh << 'STARTUP'
+    - name: Write startup.sh
+      run: |
+        cat > /opt/rt-n56u/trunk/user/etc/storage/startup.sh << 'EOF'
 #!/bin/sh
-# 寮€鏈鸿嚜鍚?- 寤惰繜30绉掔瓑缃戠粶灏辩华鍚庡惎鍔?clash
 (sleep 30 && /etc/clash/start.sh) &
-STARTUP
+EOF
         chmod +x /opt/rt-n56u/trunk/user/etc/storage/startup.sh
+        find /opt/rt-n56u/trunk/user -type f | head -30
 
-        echo "=== Files injected ==="
-        find /opt/rt-n56u/trunk/user/etc/clash -type f | head -20
-        ls -la /opt/rt-n56u/trunk/user/usr/bin/clash
-
-    - name: Build MI-R3G firmware
+    - name: Build firmware
       env:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
         cp configs/templates/$TNAME.config .config
-        # 鍚敤 OpenSSL CLI
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
-        # 绉婚櫎涓嶉渶瑕佺殑缁勪欢
         for f in SHADOWSOCKS SSSERVER DNSFORWARDER ADBYBY FRPC FRPS ALIDDNS SMARTDNS V2RAY XRAY TROJAN KOOLPROXY CADDY ADGUARDHOME WYY ZEROTIER MENTOHUST SCUTCLIENT TUNSAFE SRELAY; do
           sed -i "/CONFIG_FIRMWARE_INCLUDE_$f/d" .config
         done
         echo "CONFIG_FIRMWARE_INCLUDE_OPENVPN=n" >> .config
         echo "CONFIG_FIRMWARE_INCLUDE_DROPBEAR=y" >> .config
-        # 缂栬瘧
         sudo ./clear_tree
         sudo ./build_firmware_modify $TNAME 0
         sudo mv images/*.trx /opt/images/
         ls -la /opt/images/
 
-    - name: Verify clash in firmware
+    - name: Verify
       run: |
-        # 鎻愬彇鍥轰欢楠岃瘉 clash 鏄惁鍦ㄩ噷闈?        cd /opt/images
+        cd /opt/images
         TRX_FILE=$(ls *.trx | head -1)
         echo "Firmware: $TRX_FILE, size: $(du -h $TRX_FILE | cut -f1)"
-        # 鐢?binwalk 鎻愬彇鏍规枃浠剁郴缁熼獙璇?        sudo apt-get -y install binwalk >/dev/null 2>&1 || true
         binwalk -e $TRX_FILE --directory /tmp/fw_extract 2>/dev/null || true
-        # 鎼滅储 clash 浜岃繘鍒?        find /tmp/fw_extract -name "clash" -type f 2>/dev/null | head -5
+        find /tmp/fw_extract -name "clash" -type f 2>/dev/null | head -5
         find /tmp/fw_extract -path "*/etc/clash/*" 2>/dev/null | head -10
 
-    - name: Upload firmware
-      uses: actions/upload-artifact@master
+    - name: Upload
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: Padavan-R3G-ClashLite
