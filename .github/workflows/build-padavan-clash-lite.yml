@@ -7,114 +7,60 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@master
 
     - name: Init
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get update
-        sudo apt-get -y install unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot cpio git python3-docutils gettext automake autopoint texinfo build-essential help2man pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev wget upx-ucl squashfs-tools xz-utils binwalk
+        sudo apt-get -y install unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot cpio git python3-docutils gettext automake autopoint texinfo build-essential help2man pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev wget upx xz-utils
 
-    - name: Clone source
+    - name: Clone
       run: |
         git clone --depth=1 https://github.com/hanwckf/rt-n56u.git /opt/rt-n56u
         cd /opt/rt-n56u/toolchain-mipsel && sh dl_toolchain.sh
         mkdir -p /opt/images/
 
-    - name: Download clash core
+    - name: Download clash
       run: |
         curl -kL -o /tmp/clash.gz "https://github.com/Dreamacro/clash/releases/download/v1.18.0/clash-linux-mipsle-softfloat-v1.18.0.gz"
         gunzip -f /tmp/clash.gz
         chmod +x /tmp/clash
         upx --best /tmp/clash -o /tmp/clash-upx || cp /tmp/clash /tmp/clash-upx
-        ls -la /tmp/clash-upx
-
-    - name: Download yacd dashboard
-      run: |
-        curl -kL -o /tmp/yacd.tar.xz "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
-        cd /tmp && tar xf yacd.tar.xz && ls -la public/
-
-    - name: Prepare custom files
-      run: |
         mkdir -p /opt/rt-n56u/trunk/user/usr/bin
-        mkdir -p /opt/rt-n56u/trunk/user/etc/clash/ui
-        mkdir -p /opt/rt-n56u/trunk/user/etc/storage
         cp /tmp/clash-upx /opt/rt-n56u/trunk/user/usr/bin/clash
         chmod +x /opt/rt-n56u/trunk/user/usr/bin/clash
+        ls -la /opt/rt-n56u/trunk/user/usr/bin/clash
+
+    - name: Download yacd
+      run: |
+        curl -kL -o /tmp/yacd.tar.xz "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
+        cd /tmp && tar xf yacd.tar.xz
+        mkdir -p /opt/rt-n56u/trunk/user/etc/clash/ui
         cp -r /tmp/public/* /opt/rt-n56u/trunk/user/etc/clash/ui/
+        ls /opt/rt-n56u/trunk/user/etc/clash/ui/ | head -5
 
-    - name: Write config.yaml
+    - name: Write configs
       run: |
-        cat > /opt/rt-n56u/trunk/user/etc/clash/config.yaml << 'EOF'
-mixed-port: 7890
-redir-port: 7891
-allow-lan: true
-bind-address: "*"
-mode: direct
-log-level: info
-ipv6: false
-external-controller: 0.0.0.0:9090
-secret: ""
-external-ui: /etc/storage/clash/ui
-dns:
-  enable: true
-  listen: 0.0.0.0:1053
-  ipv6: false
-  default-nameserver:
-    - 223.5.5.5
-    - 119.29.29.29
-  nameserver:
-    - https://223.5.5.5/dns-query
-rules:
-  - MATCH,DIRECT
-EOF
-
-    - name: Write start.sh
-      run: |
-        cat > /opt/rt-n56u/trunk/user/etc/clash/start.sh << 'EOF'
-#!/bin/sh
-CLASH_DIR=/etc/storage/clash
-mkdir -p $CLASH_DIR
-[ ! -f $CLASH_DIR/config.yaml ] && cp /etc/clash/config.yaml $CLASH_DIR/
-[ ! -d $CLASH_DIR/ui ] && cp -r /etc/clash/ui $CLASH_DIR/
-killall clash 2>/dev/null
-sleep 1
-cd $CLASH_DIR
-nohup /usr/bin/clash -d . -f config.yaml > clash.log 2>&1 &
-sleep 3
-iptables -t nat -N CLASH 2>/dev/null
-iptables -t nat -F CLASH
-iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
-iptables -t nat -A PREROUTING -j CLASH
-iptables -t nat -A CLASH -d 192.168.0.0/16 -j RETURN
-iptables -t nat -A CLASH -d 10.0.0.0/8 -j RETURN
-iptables -t nat -A CLASH -d 172.16.0.0/12 -j RETURN
-iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891
-iptables -t nat -A CLASH -p udp --dport 53 -j REDIRECT --to-ports 1053
-echo "clash started, dashboard http://192.168.2.1:9090/ui/"
-EOF
+        mkdir -p /opt/rt-n56u/trunk/user/etc/clash
+        mkdir -p /opt/rt-n56u/trunk/user/etc/storage
+        printf 'mixed-port: 7890\nredir-port: 7891\nallow-lan: true\nmode: direct\nlog-level: info\nexternal-controller: 0.0.0.0:9090\nexternal-ui: /etc/storage/clash/ui\ndns:\n  enable: true\n  listen: 0.0.0.0:1053\n  nameserver:\n    - 223.5.5.5\nrules:\n  - MATCH,DIRECT\n' > /opt/rt-n56u/trunk/user/etc/clash/config.yaml
+        printf '#!/bin/sh\nmkdir -p /etc/storage/clash\n[ ! -f /etc/storage/clash/config.yaml ] && cp /etc/clash/config.yaml /etc/storage/clash/\n[ ! -d /etc/storage/clash/ui ] && cp -r /etc/clash/ui /etc/storage/clash/\nkillall clash 2>/dev/null\nsleep 1\ncd /etc/storage/clash\nnohup /usr/bin/clash -d . -f config.yaml > clash.log 2>&1 &\nsleep 3\niptables -t nat -N CLASH 2>/dev/null\niptables -t nat -F CLASH\niptables -t nat -D PREROUTING -j CLASH 2>/dev/null\niptables -t nat -A PREROUTING -j CLASH\niptables -t nat -A CLASH -d 192.168.0.0/16 -j RETURN\niptables -t nat -A CLASH -d 10.0.0.0/8 -j RETURN\niptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891\niptables -t nat -A CLASH -p udp --dport 53 -j REDIRECT --to-ports 1053\n' > /opt/rt-n56u/trunk/user/etc/clash/start.sh
         chmod +x /opt/rt-n56u/trunk/user/etc/clash/start.sh
-
-    - name: Write startup.sh
-      run: |
-        cat > /opt/rt-n56u/trunk/user/etc/storage/startup.sh << 'EOF'
-#!/bin/sh
-(sleep 30 && /etc/clash/start.sh) &
-EOF
+        printf '#!/bin/sh\n(sleep 30 && /etc/clash/start.sh) &\n' > /opt/rt-n56u/trunk/user/etc/storage/startup.sh
         chmod +x /opt/rt-n56u/trunk/user/etc/storage/startup.sh
-        find /opt/rt-n56u/trunk/user -type f | head -30
+        echo "Configs written"
+        cat /opt/rt-n56u/trunk/user/etc/clash/config.yaml
 
-    - name: Build firmware
+    - name: Build MI-R3G
       env:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
         cp configs/templates/$TNAME.config .config
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
-        for f in SHADOWSOCKS SSSERVER DNSFORWARDER ADBYBY FRPC FRPS ALIDDNS SMARTDNS V2RAY XRAY TROJAN KOOLPROXY CADDY ADGUARDHOME WYY ZEROTIER MENTOHUST SCUTCLIENT TUNSAFE SRELAY; do
-          sed -i "/CONFIG_FIRMWARE_INCLUDE_$f/d" .config
-        done
+        for f in SHADOWSOCKS SSSERVER DNSFORWARDER ADBYBY FRPC FRPS ALIDDNS SMARTDNS V2RAY XRAY TROJAN KOOLPROXY CADDY ADGUARDHOME WYY ZEROTIER MENTOHUST SCUTCLIENT TUNSAFE SRELAY; do sed -i "/CONFIG_FIRMWARE_INCLUDE_$f/d" .config; done
         echo "CONFIG_FIRMWARE_INCLUDE_OPENVPN=n" >> .config
         echo "CONFIG_FIRMWARE_INCLUDE_DROPBEAR=y" >> .config
         sudo ./clear_tree
@@ -122,17 +68,8 @@ EOF
         sudo mv images/*.trx /opt/images/
         ls -la /opt/images/
 
-    - name: Verify
-      run: |
-        cd /opt/images
-        TRX_FILE=$(ls *.trx | head -1)
-        echo "Firmware: $TRX_FILE, size: $(du -h $TRX_FILE | cut -f1)"
-        binwalk -e $TRX_FILE --directory /tmp/fw_extract 2>/dev/null || true
-        find /tmp/fw_extract -name "clash" -type f 2>/dev/null | head -5
-        find /tmp/fw_extract -path "*/etc/clash/*" 2>/dev/null | head -10
-
     - name: Upload
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@master
       if: always()
       with:
         name: Padavan-R3G-ClashLite
