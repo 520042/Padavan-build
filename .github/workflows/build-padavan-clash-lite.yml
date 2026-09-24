@@ -2,12 +2,35 @@ name: Build R3G Clash Lite
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/build-padavan-clash-lite.yml']
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@master
+
+    - name: Install ghdl helper (direct + CN mirrors fallback)
+      run: |
+        sudo tee /usr/local/bin/ghdl > /dev/null <<'EOF'
+        #!/bin/bash
+        # Usage: ghdl <github-url> <outfile>
+        # Try direct first, then CN proxy mirrors.
+        URL="$1"; OUT="$2"
+        PREFIXES=("" "https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/")
+        for p in "${PREFIXES[@]}"; do
+          echo "[ghdl] trying: ${p}${URL}"
+          if curl -fL --connect-timeout 10 --retry 1 -o "$OUT" "${p}${URL}"; then
+            echo "[ghdl] OK: ${p}${URL}"
+            exit 0
+          fi
+        done
+        echo "[ghdl] ALL FAILED for $URL" >&2
+        exit 1
+        EOF
+        sudo chmod +x /usr/local/bin/ghdl
 
     - name: Init
       env:
@@ -16,15 +39,22 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot cpio git python3-docutils gettext automake autopoint texinfo build-essential help2man pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev wget upx xz-utils
 
-    - name: Clone
+    - name: Clone rt-n56u + toolchain (CN mirror fallback)
       run: |
-        git clone --depth=1 https://github.com/hanwckf/rt-n56u.git /opt/rt-n56u
-        cd /opt/rt-n56u/toolchain-mipsel && sh dl_toolchain.sh
+        set -e
+        git clone --depth=1 https://github.com/hanwckf/rt-n56u.git /opt/rt-n56u \
+          || git clone --depth=1 https://ghfast.top/https://github.com/hanwckf/rt-n56u.git /opt/rt-n56u \
+          || git clone --depth=1 https://ghproxy.net/https://github.com/hanwckf/rt-n56u.git /opt/rt-n56u
+        cd /opt/rt-n56u/toolchain-mipsel
+        ghdl "https://github.com/hanwckf/padavan-toolchain/releases/download/v1.1/mipsel-linux-uclibc.tar.xz" /tmp/tc.tar.xz
+        mkdir -p toolchain-3.4.x
+        tar -xf /tmp/tc.tar.xz -C toolchain-3.4.x
         mkdir -p /opt/images/
 
     - name: Download mihomo core
       run: |
-        curl -kL -o /tmp/mihomo.gz "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-mipsle-softfloat-v1.19.31.gz"
+        set -e
+        ghdl "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-mipsle-softfloat-v1.19.31.gz" /tmp/mihomo.gz
         gunzip -f /tmp/mihomo.gz
         chmod +x /tmp/mihomo
         upx --best /tmp/mihomo -o /tmp/mihomo-upx || cp /tmp/mihomo /tmp/mihomo-upx
@@ -35,7 +65,8 @@ jobs:
 
     - name: Download yacd
       run: |
-        curl -kL -o /tmp/yacd.tar.xz "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
+        set -e
+        ghdl "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz" /tmp/yacd.tar.xz
         cd /tmp && tar xf yacd.tar.xz
         mkdir -p /opt/rt-n56u/trunk/user/etc/clash/ui
         cp -r /tmp/public/* /opt/rt-n56u/trunk/user/etc/clash/ui/
