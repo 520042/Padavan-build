@@ -150,7 +150,7 @@ jobs:
         CLASSIC_URL="https://github.com/vernesong/OpenClash/releases/download/Clash/clash-linux-mipsle-softfloat.tar.gz"
         dl() {
             url="$1"; out="$2"
-            for p in "" "https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/"; do
+            for p in "https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/" ""; do
                 echo "[dl] trying: ${p}${url}"
                 if wget -q -T 15 -O "$out" "${p}${url}" && [ -s "$out" ]; then
                     echo "[dl] OK"; return 0
