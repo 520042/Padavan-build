@@ -17,13 +17,12 @@ jobs:
         sudo tee /usr/local/bin/ghdl > /dev/null <<'EOF'
         #!/bin/bash
         # Usage: ghdl <github-url> <outfile>
-        # Try direct first, then CN proxy mirrors.
         URL="$1"; OUT="$2"
         PREFIXES=("" "https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/")
         for p in "${PREFIXES[@]}"; do
           echo "[ghdl] trying: ${p}${URL}"
           if curl -fL --connect-timeout 10 --retry 1 -o "$OUT" "${p}${URL}"; then
-            echo "[ghdl] OK: ${p}${URL}"
+            echo "[ghdl] OK"
             exit 0
           fi
         done
@@ -51,19 +50,17 @@ jobs:
         tar -xf /tmp/tc.tar.xz -C toolchain-3.4.x
         mkdir -p /opt/images/
 
-    - name: Download mihomo core
+    - name: Download classic clash core (2.64MB, embedded fallback)
       run: |
         set -e
-        ghdl "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-mipsle-softfloat-v1.19.31.gz" /tmp/mihomo.gz
-        gunzip -f /tmp/mihomo.gz
-        chmod +x /tmp/mihomo
-        upx --best /tmp/mihomo -o /tmp/mihomo-upx || cp /tmp/mihomo /tmp/mihomo-upx
+        ghdl "https://github.com/vernesong/OpenClash/releases/download/Clash/clash-linux-mipsle-softfloat.tar.gz" /tmp/clash-core.tar.gz
+        cd /tmp && tar xzf clash-core.tar.gz
         mkdir -p /opt/rt-n56u/trunk/user/usr/bin
-        cp /tmp/mihomo-upx /opt/rt-n56u/trunk/user/usr/bin/clash
+        cp /tmp/clash /opt/rt-n56u/trunk/user/usr/bin/clash
         chmod +x /opt/rt-n56u/trunk/user/usr/bin/clash
         ls -la /opt/rt-n56u/trunk/user/usr/bin/clash
 
-    - name: Download yacd
+    - name: Download yacd UI
       run: |
         set -e
         ghdl "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz" /tmp/yacd.tar.xz
@@ -72,17 +69,128 @@ jobs:
         cp -r /tmp/public/* /opt/rt-n56u/trunk/user/etc/clash/ui/
         ls /opt/rt-n56u/trunk/user/etc/clash/ui/ | head -5
 
-    - name: Write configs
+    - name: Write clash configs and scripts
       run: |
         mkdir -p /opt/rt-n56u/trunk/user/etc/clash
         mkdir -p /opt/rt-n56u/trunk/user/etc/storage
-        printf 'mixed-port: 7890\nredir-port: 7891\nallow-lan: true\nmode: direct\nlog-level: info\nexternal-controller: 0.0.0.0:9090\nexternal-ui: /etc/storage/clash/ui\ndns:\n  enable: true\n  listen: 0.0.0.0:1053\n  nameserver:\n    - 223.5.5.5\nrules:\n  - MATCH,DIRECT\n' > /opt/rt-n56u/trunk/user/etc/clash/config.yaml
-        printf '#!/bin/sh\nmkdir -p /etc/storage/clash\n[ ! -f /etc/storage/clash/config.yaml ] && cp /etc/clash/config.yaml /etc/storage/clash/\n[ ! -d /etc/storage/clash/ui ] && cp -r /etc/clash/ui /etc/storage/clash/\nkillall clash 2>/dev/null\nsleep 1\ncd /etc/storage/clash\nnohup /usr/bin/clash -d . -f config.yaml > clash.log 2>&1 &\nsleep 3\niptables -t nat -N CLASH 2>/dev/null\niptables -t nat -F CLASH\niptables -t nat -D PREROUTING -j CLASH 2>/dev/null\niptables -t nat -A PREROUTING -j CLASH\niptables -t nat -A CLASH -d 192.168.0.0/16 -j RETURN\niptables -t nat -A CLASH -d 10.0.0.0/8 -j RETURN\niptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891\niptables -t nat -A CLASH -p udp --dport 53 -j REDIRECT --to-ports 1053\n' > /opt/rt-n56u/trunk/user/etc/clash/start.sh
-        chmod +x /opt/rt-n56u/trunk/user/etc/clash/start.sh
-        printf '#!/bin/sh\n(sleep 30 && /etc/clash/start.sh) &\n' > /opt/rt-n56u/trunk/user/etc/storage/startup.sh
-        chmod +x /opt/rt-n56u/trunk/user/etc/storage/startup.sh
-        echo "Configs written"
-        cat /opt/rt-n56u/trunk/user/etc/clash/config.yaml
+        cat > /opt/rt-n56u/trunk/user/etc/clash/config.yaml <<'CFGEOF'
+        mixed-port: 7890
+        redir-port: 7891
+        allow-lan: true
+        bind-address: '*'
+        mode: direct
+        log-level: info
+        external-controller: 0.0.0.0:9090
+        external-ui: /etc/clash/ui
+        dns:
+          enable: true
+          listen: 0.0.0.0:1053
+          enhanced-mode: fake-ip
+          fake-ip-range: 198.18.0.1/16
+          nameserver:
+            - 223.5.5.5
+            - 119.29.29.29
+        rules:
+          - MATCH,DIRECT
+        CFGEOF
+        cat > /opt/rt-n56u/trunk/user/etc/clash/start.sh <<'STARTEOF'
+        #!/bin/sh
+        # Clash start/stop: /etc/clash/start.sh [start|stop]
+        MODE="${1:-start}"
+        CLASH_DIR="/etc/storage/clash"
+        BIN_EMBED="/usr/bin/clash"
+        BIN_TMP="/tmp/mihomo/clash"
+        start() {
+            mkdir -p "$CLASH_DIR"
+            [ ! -f "$CLASH_DIR/config.yaml" ] && cp /etc/clash/config.yaml "$CLASH_DIR/config.yaml"
+            if [ -x "$BIN_TMP" ]; then
+                BIN="$BIN_TMP"; echo "Using mihomo core: $BIN"
+            elif [ -x "$BIN_EMBED" ]; then
+                BIN="$BIN_EMBED"; echo "Using embedded clash core: $BIN"
+            else
+                echo "No clash binary. Run: /etc/clash/clash-get.sh"; exit 1
+            fi
+            killall clash mihomo 2>/dev/null; sleep 1
+            cd "$CLASH_DIR" || exit 1
+            nohup "$BIN" -d "$CLASH_DIR" -f "$CLASH_DIR/config.yaml" > "$CLASH_DIR/clash.log" 2>&1 &
+            sleep 3
+            iptables -t nat -N CLASH 2>/dev/null
+            iptables -t nat -F CLASH
+            iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+            iptables -t nat -A PREROUTING -j CLASH
+            for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+                iptables -t nat -A CLASH -d "$net" -j RETURN
+            done
+            iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891
+            iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053
+            iptables -t nat -A PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 1053
+            echo "Clash started. UI: http://$(ip -4 addr show br0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1):9090/ui"
+        }
+        stop() {
+            killall clash mihomo 2>/dev/null
+            iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+            iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null
+            iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null
+            iptables -t nat -F CLASH 2>/dev/null
+            iptables -t nat -X CLASH 2>/dev/null
+            echo "Clash stopped."
+        }
+        case "$MODE" in
+            start) start ;;
+            stop)  stop ;;
+            *)     echo "Usage: $0 [start|stop]" ;;
+        esac
+        STARTEOF
+        cat > /opt/rt-n56u/trunk/user/etc/clash/clash-get.sh <<'GETEOF'
+        #!/bin/sh
+        # Download/upgrade clash core: /etc/clash/clash-get.sh [tmp|recover] [ver]
+        TARGET="${1:-tmp}"
+        VER="${2:-v1.19.31}"
+        MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/$VER/mihomo-linux-mipsle-softfloat-$VER.gz"
+        CLASSIC_URL="https://github.com/vernesong/OpenClash/releases/download/Clash/clash-linux-mipsle-softfloat.tar.gz"
+        dl() {
+            url="$1"; out="$2"
+            for p in "" "https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/"; do
+                echo "[dl] trying: ${p}${url}"
+                if wget -q -T 15 -O "$out" "${p}${url}" && [ -s "$out" ]; then
+                    echo "[dl] OK"; return 0
+                fi
+                rm -f "$out"
+            done
+            return 1
+        }
+        case "$TARGET" in
+            tmp)
+                mkdir -p /tmp/mihomo
+                dl "$MIHOMO_URL" /tmp/mihomo/core.gz || { echo "download failed"; exit 1; }
+                gunzip -f /tmp/mihomo/core.gz && mv /tmp/mihomo/core /tmp/mihomo/clash
+                chmod +x /tmp/mihomo/clash
+                echo "mihomo $VER installed: /tmp/mihomo/clash"
+                ;;
+            recover)
+                mkdir -p /tmp/clash-recover
+                dl "$CLASSIC_URL" /tmp/clash-recover/core.tar.gz || { echo "download failed"; exit 1; }
+                tar -xzf /tmp/clash-recover/core.tar.gz -C /tmp/clash-recover && chmod +x /tmp/clash-recover/clash
+                cp /tmp/clash-recover/clash /usr/bin/clash 2>/dev/null || echo "core at /tmp/clash-recover/clash"
+                ;;
+            *) echo "Usage: $0 [tmp|recover] [ver]"; exit 1 ;;
+        esac
+        echo "restart to apply: /etc/clash/start.sh start"
+        GETEOF
+        cat > /opt/rt-n56u/trunk/user/etc/storage/startup.sh <<'STARUPEOF'
+        #!/bin/sh
+        # Boot: wait 60s, auto-download mihomo core to RAM if missing, then start clash.
+        # If download fails, start.sh falls back to the embedded classic clash core.
+        (sleep 60 && {
+            [ ! -x /tmp/mihomo/clash ] && /etc/clash/clash-get.sh tmp
+            /etc/clash/start.sh start
+        }) &
+        STARUPEOF
+        chmod +x /opt/rt-n56u/trunk/user/etc/clash/start.sh \
+                 /opt/rt-n56u/trunk/user/etc/clash/clash-get.sh \
+                 /opt/rt-n56u/trunk/user/etc/storage/startup.sh
+        echo "=== configs written ==="
+        ls -la /opt/rt-n56u/trunk/user/etc/clash/
 
     - name: Build MI-R3G
       env:
