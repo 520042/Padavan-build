@@ -50,30 +50,27 @@ jobs:
         tar -xf /tmp/tc.tar.xz -C toolchain-3.4.x
         mkdir -p /opt/images/
 
-    - name: Download classic clash core (2.64MB, embedded fallback)
+    - name: Download classic clash core (2.64MB, embedded)
       run: |
         set -e
+        mkdir -p /opt/payload
         ghdl "https://github.com/vernesong/OpenClash/releases/download/Clash/clash-linux-mipsle-softfloat.tar.gz" /tmp/clash-core.tar.gz
         cd /tmp && tar xzf clash-core.tar.gz
-        mkdir -p /opt/rt-n56u/trunk/user/usr/bin
-        cp /tmp/clash /opt/rt-n56u/trunk/user/usr/bin/clash
-        chmod +x /opt/rt-n56u/trunk/user/usr/bin/clash
-        ls -la /opt/rt-n56u/trunk/user/usr/bin/clash
+        cp /tmp/clash /opt/payload/clash
+        chmod +x /opt/payload/clash
+        ls -la /opt/payload/clash
 
     - name: Download yacd UI
       run: |
         set -e
         ghdl "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz" /tmp/yacd.tar.xz
         cd /tmp && tar xf yacd.tar.xz
-        mkdir -p /opt/rt-n56u/trunk/user/etc/clash/ui
-        cp -r /tmp/public/* /opt/rt-n56u/trunk/user/etc/clash/ui/
-        ls /opt/rt-n56u/trunk/user/etc/clash/ui/ | head -5
+        cp -r /tmp/public /opt/payload/ui
+        ls /opt/payload/ui | head -5
 
-    - name: Write clash configs and scripts
+    - name: Write clash payload scripts
       run: |
-        mkdir -p /opt/rt-n56u/trunk/user/etc/clash
-        mkdir -p /opt/rt-n56u/trunk/user/etc/storage
-        cat > /opt/rt-n56u/trunk/user/etc/clash/config.yaml <<'CFGEOF'
+        cat > /opt/payload/config.yaml <<'CFGEOF'
         mixed-port: 7890
         redir-port: 7891
         allow-lan: true
@@ -93,7 +90,7 @@ jobs:
         rules:
           - MATCH,DIRECT
         CFGEOF
-        cat > /opt/rt-n56u/trunk/user/etc/clash/start.sh <<'STARTEOF'
+        cat > /opt/payload/start.sh <<'STARTEOF'
         #!/bin/sh
         # Clash start/stop: /etc/clash/start.sh [start|stop]
         MODE="${1:-start}"
@@ -141,7 +138,7 @@ jobs:
             *)     echo "Usage: $0 [start|stop]" ;;
         esac
         STARTEOF
-        cat > /opt/rt-n56u/trunk/user/etc/clash/clash-get.sh <<'GETEOF'
+        cat > /opt/payload/clash-get.sh <<'GETEOF'
         #!/bin/sh
         # Download/upgrade clash core: /etc/clash/clash-get.sh [tmp|recover] [ver]
         TARGET="${1:-tmp}"
@@ -177,26 +174,44 @@ jobs:
         esac
         echo "restart to apply: /etc/clash/start.sh start"
         GETEOF
-        cat > /opt/rt-n56u/trunk/user/etc/storage/startup.sh <<'STARUPEOF'
+        cat > /opt/payload/clash-boot.sh <<'BOOTEOF'
         #!/bin/sh
-        # Boot: wait 60s, auto-download mihomo core to RAM if missing, then start clash.
+        # Boot flow: wait 60s, auto-download mihomo core to RAM if missing, then start clash.
         # If download fails, start.sh falls back to the embedded classic clash core.
         (sleep 60 && {
             [ ! -x /tmp/mihomo/clash ] && /etc/clash/clash-get.sh tmp
             /etc/clash/start.sh start
         }) &
-        STARUPEOF
-        chmod +x /opt/rt-n56u/trunk/user/etc/clash/start.sh \
-                 /opt/rt-n56u/trunk/user/etc/clash/clash-get.sh \
-                 /opt/rt-n56u/trunk/user/etc/storage/startup.sh
-        echo "=== configs written ==="
-        ls -la /opt/rt-n56u/trunk/user/etc/clash/
+        BOOTEOF
+        chmod +x /opt/payload/*.sh
+        echo "=== payload ready ==="
+        ls -la /opt/payload/
 
-    - name: Build MI-R3G
+    - name: Build MI-R3G (inject payload into romfs image target)
       env:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
+        # Patch top-level Makefile image target: copy payload into romfs
+        # AFTER romfs assembly+strip, BEFORE trx packaging.
+        python3 - <<'PYEOF'
+        old = "image:\n\t[ -d $(IMAGEDIR) ] || mkdir $(IMAGEDIR)\n\t$(MAKEARCH) -C vendors image"
+        new = (
+          "image:\n"
+          "\tmkdir -p $(ROMFSDIR)/usr/bin $(ROMFSDIR)/etc/clash/ui\n"
+          "\tcp -f /opt/payload/clash $(ROMFSDIR)/usr/bin/clash\n"
+          "\tcp -f /opt/payload/start.sh /opt/payload/clash-get.sh /opt/payload/clash-boot.sh $(ROMFSDIR)/etc/clash/\n"
+          "\tcp -f /opt/payload/config.yaml $(ROMFSDIR)/etc/clash/config.yaml\n"
+          "\tcp -rf /opt/payload/ui/. $(ROMFSDIR)/etc/clash/ui/\n"
+          "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/etc/clash/*.sh\n"
+          "\t[ -d $(IMAGEDIR) ] || mkdir $(IMAGEDIR)\n"
+          "\t$(MAKEARCH) -C vendors image"
+        )
+        s = open("Makefile").read()
+        assert old in s, "image target not found in Makefile"
+        open("Makefile", "w").write(s.replace(old, new))
+        print("Makefile patched: payload injection added to image target")
+        PYEOF
         cp configs/templates/$TNAME.config .config
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
         for f in SHADOWSOCKS SSSERVER DNSFORWARDER ADBYBY FRPC FRPS ALIDDNS SMARTDNS V2RAY XRAY TROJAN KOOLPROXY CADDY ADGUARDHOME WYY ZEROTIER MENTOHUST SCUTCLIENT TUNSAFE SRELAY; do sed -i "/CONFIG_FIRMWARE_INCLUDE_$f/d" .config; done
