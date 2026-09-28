@@ -61,6 +61,12 @@ jobs:
         ghdl "$REL/panel.html" /opt/payload/index.html
         ghdl "$REL/clash-ctl" /opt/payload/clash-ctl && chmod +x /opt/payload/clash-ctl
         ghdl "$REL/clash-web.sh" /opt/payload/clash-web.sh && chmod +x /opt/payload/clash-web.sh
+        # GeoIP 库: 经典 clash 启动时找不到会联网下载, 证书失败即 fatal 退出
+        # 这正是之前"核心崩溃导致全屋断网"的根因 -> 内置精简版(CN专用 222KB)彻底消除该依赖
+        ghdl "$REL/Country.mmdb" /opt/payload/Country.mmdb
+        [ "$(stat -c %s /opt/payload/Country.mmdb)" -gt 100000 ] || { echo "FATAL: Country.mmdb 过小"; exit 1; }
+        tail -c 64 /opt/payload/Country.mmdb | grep -q "MaxMind.com" || { echo "FATAL: Country.mmdb 不是合法 MMDB"; exit 1; }
+        echo "Country.mmdb 就绪: $(stat -c %s /opt/payload/Country.mmdb) bytes"
         ls -la /opt/payload/
 
     - name: Build MI-R3G (busybox httpd + panel + romfs injection)
@@ -119,6 +125,8 @@ jobs:
           "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
           "\tcp -f /opt/payload/index.html $(ROMFSDIR)/www2/index.html ; \\\n"
           "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
+          "\tmkdir -p $(ROMFSDIR)/usr/share/clash ; \\\n"
+          "\tcp -f /opt/payload/Country.mmdb $(ROMFSDIR)/usr/share/clash/Country.mmdb ; \\\n"
           "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/usr/bin/clash-ctl $(ROMFSDIR)/usr/bin/clash-web.sh $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
           "\t$(MAKEARCH) -C vendors romfs.post"
         )
@@ -143,7 +151,7 @@ jobs:
         ls -la images/
         tools/mksquashfs_xz/unsquashfs -l images/ramdisk > /tmp/rd_list.txt 2>&1 || true
         PASS=1
-        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash"; do
+        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "usr/share/clash/Country.mmdb"; do
           grep -q "$f" /tmp/rd_list.txt || { echo "MISSING: $f"; PASS=0; }
         done
         [ "$PASS" = "1" ] || { echo "=== PAYLOAD MISSING ==="; exit 1; }
