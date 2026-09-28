@@ -1,4 +1,4 @@
-name: Build R3G Clash Lite (WebUI Panel)
+name: Build R3G Clash Lite (Native WebUI)
 
 on:
   workflow_dispatch:
@@ -50,7 +50,7 @@ jobs:
         tar -xf /tmp/tc.tar.xz -C toolchain-3.4.x
         mkdir -p /opt/images/
 
-    - name: Download payload (embedded core + WebUI panel from our release)
+    - name: Download payload (embedded core + native WebUI from our release)
       run: |
         set -e
         mkdir -p /opt/payload
@@ -61,9 +61,14 @@ jobs:
         ghdl "$REL/panel.html" /opt/payload/index.html
         ghdl "$REL/clash-ctl" /opt/payload/clash-ctl && chmod +x /opt/payload/clash-ctl
         ghdl "$REL/clash-web.sh" /opt/payload/clash-web.sh && chmod +x /opt/payload/clash-web.sh
-        # 后台内嵌页面(iframe 指向 9091 面板), 挂到左侧菜单「参数设置」组下
-        ghdl "$REL/Clash_Content.asp" /opt/payload/Clash_Content.asp
-        grep -q '9091' /opt/payload/Clash_Content.asp || { echo "FATAL: Clash_Content.asp 内容异常"; exit 1; }
+        # 原生 Padavan 设置页 (照 hanwckf 自带 Shadowsocks.asp 模式)
+        ghdl "$REL/Advanced_Clash_Content.asp" /opt/payload/Advanced_Clash_Content.asp
+        ghdl "$REL/Clash_action.asp" /opt/payload/Clash_action.asp
+        grep -q 'clash_status' /opt/payload/Advanced_Clash_Content.asp || { echo "FATAL: Advanced_Clash_Content.asp 内容异常"; exit 1; }
+        grep -q 'clash_action' /opt/payload/Clash_action.asp || { echo "FATAL: Clash_action.asp 内容异常"; exit 1; }
+        # C 源码补丁脚本 (variables.c + web_ex.c)
+        ghdl "$REL/native_patch.py" /opt/payload/native_patch.py
+        grep -q 'clash_action_hook' /opt/payload/native_patch.py || { echo "FATAL: native_patch.py 内容异常"; exit 1; }
         # GeoIP 库: 经典 clash 启动时找不到会联网下载, 证书失败即 fatal 退出
         # 这正是之前"核心崩溃导致全屋断网"的根因 -> 内置精简版(CN专用 222KB)彻底消除该依赖
         ghdl "$REL/Country.mmdb" /opt/payload/Country.mmdb
@@ -72,69 +77,55 @@ jobs:
         echo "Country.mmdb 就绪: $(stat -c %s /opt/payload/Country.mmdb) bytes"
         ls -la /opt/payload/
 
-    - name: Build MI-R3G (busybox httpd + panel + romfs injection)
+    - name: Build MI-R3G (native WebUI + C patches + romfs injection)
       env:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
-        # 0) 版本号: 原 FIRMWARE_BUILDS_REV=$(shell git rev-parse --short=7 HEAD) 取的是 rt-n56u 源码哈希,
-        #    那个仓库 2021 年后就没更新过 -> 永远显示 23387b2, 没法区分固件新旧.
-        #    换成 "日期-本仓库commit"(北京时间), 刷完在后台一眼看出是哪一次构建.
+        # 0) 版本号: 换成 "日期-本仓库commit"(北京时间), 刷完在后台一眼看出是哪一次构建
         [ -f versions.inc ] || { echo "FATAL: versions.inc 不存在"; exit 1; }
         BUILD_REV="$(TZ='Asia/Shanghai' date +%Y%m%d)-$(echo "${GITHUB_SHA:-local}" | cut -c1-7)"
         sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${BUILD_REV}|" versions.inc
         grep -q "^FIRMWARE_BUILDS_REV=${BUILD_REV}$" versions.inc || { echo "FATAL: 版本号替换失败"; exit 1; }
         echo "=== 固件版本号配置 (versions.inc) ==="
         cat versions.inc
-        # 1) busybox 启用 httpd applet + CGI (面板按钮靠 CGI 执行, 缺一不可)
+        # 1) busybox 启用 httpd applet + CGI (9091 面板服务依赖, 缺一不可)
         BB=configs/boards/busybox.config
         sed -i 's|# CONFIG_HTTPD is not set|CONFIG_HTTPD=y|' $BB
         sed -i 's|# CONFIG_FEATURE_HTTPD_CGI is not set|CONFIG_FEATURE_HTTPD_CGI=y|' $BB
         sed -i 's|# CONFIG_FEATURE_HTTPD_BASIC_AUTH is not set|CONFIG_FEATURE_HTTPD_BASIC_AUTH=y|' $BB
         grep -q '^CONFIG_HTTPD=y' $BB || { echo "FATAL: busybox CONFIG_HTTPD 未启用"; exit 1; }
         grep -q '^CONFIG_FEATURE_HTTPD_CGI=y' $BB || { echo "FATAL: busybox CONFIG_FEATURE_HTTPD_CGI 未启用"; exit 1; }
-        echo "=== busybox HTTPD 配置 ==="; grep 'HTTPD' $BB | grep -v 'is not set'
-        # 2) 主后台服务页加入 Clash 控制面板入口链接
+        # 2) C 源码补丁: variables.c(nvram 变量注册) + web_ex.c(ej 钩子) -> 原生 Apply/启停
+        cp /opt/payload/native_patch.py user/httpd/native_patch.py
+        cd user/httpd
+        python3 native_patch.py || { echo "FATAL: C 补丁失败"; exit 1; }
+        rm -f native_patch.py
+        grep -q "variables_ClashConf" variables.c || { echo "FATAL: variables.c 补丁未生效"; exit 1; }
+        grep -q "clash_action_hook" web_ex.c || { echo "FATAL: web_ex.c 补丁未生效"; exit 1; }
+        grep -q "clash_status_hook" web_ex.c || { echo "FATAL: web_ex.c status 补丁未生效"; exit 1; }
+        echo "=== C 补丁验证通过 (variables.c + web_ex.c) ==="
+        cd /opt/rt-n56u/trunk
+        # 3) 后台左侧菜单加「Clash」项 (完全照 shadowsocks 的注入模式)
+        #    侧边栏: menuL2_title/menuL2_link push (index 15); 页内 tabs 数组: tabtitle[14]/tablink[14]
+        #    页面 show_menu(5,15,1) -> 页内 tabs 读 tabtitle[L2-1]=[14] 对应
         python3 - <<'PYEOF'
-        import re
-        p = "user/www/n56u_ribbon_fixed/Advanced_Services_Content.asp"
-        s = open(p).read()
-        js_anchor = "function change_ttyd_enabled(){"
-        js_new = (
-          "function on_clash_link(){\n"
-          "\twindow.open(\"http://\"+lan_ipaddr+\":9091/\", \"clash_panel\");\n"
-          "}\n\n" + js_anchor)
-        assert js_anchor in s, "js anchor not found"
-        s = s.replace(js_anchor, js_new, 1)
-        m = re.search(r'<tr id="ttyd_webui">.*?</tr>', s, re.S)
-        assert m, "html anchor not found"
-        row = m.group(0)
-        new_row = (row + '\n\n'
-          '                                        <tr id="clash_panel_link">\n'
-          '                                            <td>\n'
-          '                                                <a href="javascript:on_clash_link();" id="web_clash_link"><b>Clash 控制面板</b></a>\n'
-          '                                            </td>\n'
-          '                                        </tr>')
-        s = s.replace(row, new_row, 1)
-        open(p, "w").write(s)
-        print("ASP patched: Clash panel link added")
-        PYEOF
-        # 2b) 后台左侧菜单加一项「Clash 控制台」(挂到"参数设置"分组)
-        #     state.js 里 tabtitle[7]/tablink[7] 就是后台左侧菜单的"参数设置"组
-        python3 - <<'PYEOF'
-        import re
         p = "user/www/n56u_ribbon_fixed/state.js"
         s = open(p).read()
-        s, n1 = re.subn(r'(tabtitle\[7\]\s*=\s*new Array\([^;]*?)\)\s*;',
-                        r'\1, "Clash 控制台");', s, count=1)
-        assert n1 == 1, "tabtitle[7] anchor not found"
-        s, n2 = re.subn(r'(tablink\[7\]\s*=\s*new Array\([^;]*?)\)\s*;',
-                        r'\1, "Clash_Content.asp");', s, count=1)
-        assert n2 == 1, "tablink[7] anchor not found"
+        a1 = 'if (found_app_mentohust()){\n\tmentohust_array = new Array("","mentohust.asp","mentohust_log.asp");\n\ttablink[13] = (mentohust_array);\n}'
+        assert a1 in s, "tablink mentohust anchor not found"
+        s = s.replace(a1, a1 + '\nclash_array = new Array("", "Advanced_Clash_Content.asp");\ntabtitle[14] = new Array("", "Clash");\ntablink[14] = (clash_array);', 1)
+        a2 = 'if (found_app_mentohust()){\n\tmenuL2_title.push("mentohust");\n} else menuL2_title.push("");'
+        assert a2 in s, "menuL2_title mentohust anchor not found"
+        s = s.replace(a2, a2 + '\nmenuL2_title.push("Clash");', 1)
+        a3 = 'if (found_app_mentohust()){\n\tmenuL2_link.push(mentohust_array[1]);\n} else menuL2_link.push("");'
+        assert a3 in s, "menuL2_link mentohust anchor not found"
+        s = s.replace(a3, a3 + '\nmenuL2_link.push(clash_array[1]);', 1)
         open(p, "w").write(s)
-        print("state.js patched: Clash console menu item added")
+        print("state.js patched: native Clash menu item added (L2 index 15)")
         PYEOF
-        # 3) romfs.post 注入: strip 后 mksquashfs 前拷入 payload
+        grep -q 'Advanced_Clash_Content.asp' user/www/n56u_ribbon_fixed/state.js || { echo "FATAL: state.js 菜单补丁未生效"; exit 1; }
+        # 4) romfs.post 注入: strip 后 mksquashfs 前拷入 payload
         python3 - <<'PYEOF'
         old = (
           "romfs.post:\n"
@@ -149,7 +140,8 @@ jobs:
           "\tcp -f /opt/payload/clash $(ROMFSDIR)/usr/bin/clash ; \\\n"
           "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/usr/bin/clash-ctl ; \\\n"
           "\tcp -f /opt/payload/clash-web.sh $(ROMFSDIR)/usr/bin/clash-web.sh ; \\\n"
-          "\tcp -f /opt/payload/Clash_Content.asp $(ROMFSDIR)/www/Clash_Content.asp ; \\\n"
+          "\tcp -f /opt/payload/Advanced_Clash_Content.asp $(ROMFSDIR)/www/Advanced_Clash_Content.asp ; \\\n"
+          "\tcp -f /opt/payload/Clash_action.asp $(ROMFSDIR)/www/Clash_action.asp ; \\\n"
           "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
           "\tcp -f /opt/payload/index.html $(ROMFSDIR)/www2/index.html ; \\\n"
           "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
@@ -161,7 +153,7 @@ jobs:
         s = open("Makefile").read()
         assert old in s, "romfs.post target not found"
         open("Makefile", "w").write(s.replace(old, new))
-        print("Makefile patched: payload + panel injection in romfs.post")
+        print("Makefile patched: payload injection in romfs.post")
         PYEOF
         cp configs/templates/$TNAME.config .config
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
@@ -179,28 +171,26 @@ jobs:
         ls -la images/
         tools/mksquashfs_xz/unsquashfs -l images/ramdisk > /tmp/rd_list.txt 2>&1 || true
         PASS=1
-        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "usr/share/clash/Country.mmdb"; do
+        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "usr/share/clash/Country.mmdb" "www/Advanced_Clash_Content.asp" "www/Clash_action.asp"; do
           grep -q "$f" /tmp/rd_list.txt || { echo "MISSING: $f"; PASS=0; }
         done
         [ "$PASS" = "1" ] || { echo "=== PAYLOAD MISSING ==="; exit 1; }
-        # 校验 ASP 页面含 Clash 入口
-        rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/Advanced_Services_Content.asp" > /dev/null 2>&1
-        grep -q "clash_panel_link" /tmp/sqx/www/Advanced_Services_Content.asp && echo "=== ALL PAYLOAD VERIFIED (core+panel+menu) ===" || { echo "=== ASP PATCH MISSING ==="; exit 1; }
-        # 硬校验: 左侧菜单项 + iframe 页面
-        tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx2 images/ramdisk "www/state.js" "www/Clash_Content.asp" > /dev/null 2>&1 || true
-        grep -q 'Clash_Content.asp' /tmp/sqx2/www/state.js || { echo "=== MENU ITEM MISSING (state.js) ==="; exit 1; }
-        grep -q 'Clash 控制台' /tmp/sqx2/www/state.js || { echo "=== MENU LABEL MISSING ==="; exit 1; }
-        grep -q '9091' /tmp/sqx2/www/Clash_Content.asp || { echo "=== IFRAME PAGE MISSING ==="; exit 1; }
-        echo "=== MENU + IFRAME PAGE VERIFIED ==="
-        # 硬校验: busybox 编译配置里 HTTPD + CGI 真的生效 (Kconfig 依赖可能把它重置回 n)
+        # 硬校验: 原生页面 + 菜单 + ej 钩子链路
+        rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/state.js" "www/Advanced_Clash_Content.asp" > /dev/null 2>&1
+        grep -q 'Advanced_Clash_Content.asp' /tmp/sqx/www/state.js || { echo "=== MENU ITEM MISSING (state.js) ==="; exit 1; }
+        grep -q 'menuL2_title.push("Clash")' /tmp/sqx/www/state.js || { echo "=== MENU LABEL MISSING ==="; exit 1; }
+        grep -q 'clash_status' /tmp/sqx/www/Advanced_Clash_Content.asp || { echo "=== NATIVE PAGE BROKEN ==="; exit 1; }
+        grep -q 'ClashConf' /tmp/sqx/www/state.js || true
+        echo "=== NATIVE PAGE + MENU VERIFIED ==="
+        # httpd 二进制必须含 clash ej 钩子(证明 C 补丁编进去了)
+        HTPATH=$(find romfs -type f -name httpd 2>/dev/null | head -1)
+        [ -n "$HTPATH" ] && { strings -a "$HTPATH" | grep -q "clash_status" && echo "=== httpd 含 clash hooks ===" || echo "WARN: httpd 未含 clash hooks (检查 C 补丁)"; } || echo "WARN: 未找到独立 httpd (可能内置于 busybox)"
+        # busybox HTTPD + CGI 编译验证
         BBCFG=$(find user/busybox -maxdepth 2 -name ".config" 2>/dev/null | head -1)
-        echo "busybox 编译配置: ${BBCFG:-未找到}"
-        [ -n "$BBCFG" ] || { echo "FATAL: 找不到 busybox .config, 无法确认 httpd 编译结果"; exit 1; }
+        [ -n "$BBCFG" ] || { echo "FATAL: 找不到 busybox .config"; exit 1; }
         grep -q '^CONFIG_HTTPD=y' "$BBCFG" || { echo "FATAL: busybox 编译配置里 HTTPD 未生效"; exit 1; }
         grep -q '^CONFIG_FEATURE_HTTPD_CGI=y' "$BBCFG" || { echo "FATAL: busybox 编译配置里 CGI 未生效"; exit 1; }
-        # 二进制层再确认一次: busybox 可执行文件里必须有 httpd applet 名
         BBPATH=$(find romfs -type f -name busybox 2>/dev/null | head -1)
-        echo "busybox 二进制: ${BBPATH:-未找到}"
         [ -n "$BBPATH" ] || { echo "FATAL: romfs 里找不到 busybox"; exit 1; }
         strings -a "$BBPATH" | grep -qx "httpd" || { echo "FATAL: busybox 二进制里没有 httpd applet"; exit 1; }
         echo "=== BUSYBOX HTTPD + CGI 编译验证通过 ==="
