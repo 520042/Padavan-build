@@ -72,6 +72,7 @@ jobs:
         sed -i 's/# CONFIG_HTTPD is not set/CONFIG_HTTPD=y/' configs/boards/busybox.config
         # 2) 主后台服务页加入 Clash 控制面板入口链接
         python3 - <<'PYEOF'
+        import re
         p = "user/www/n56u_ribbon_fixed/Advanced_Services_Content.asp"
         s = open(p).read()
         js_anchor = "function change_ttyd_enabled(){"
@@ -81,20 +82,16 @@ jobs:
           "}\n\n" + js_anchor)
         assert js_anchor in s, "js anchor not found"
         s = s.replace(js_anchor, js_new, 1)
-        html_anchor = '''<tr id="ttyd_webui">
-                                            <td>
-                                                <a href="javascript:on_ttyd_link();" id="web_ttyd_link">ttyd Web Shell</a>
-                                            </td>
-                                        </tr>'''
-        html_new = html_anchor + '''
-
-                                        <tr id="clash_panel_link">
-                                            <td>
-                                                <a href="javascript:on_clash_link();" id="web_clash_link"><b>Clash 控制面板</b></a>
-                                            </td>
-                                        </tr>'''
-        assert html_anchor in s, "html anchor not found"
-        s = s.replace(html_anchor, html_new, 1)
+        m = re.search(r'<tr id="ttyd_webui">.*?</tr>', s, re.S)
+        assert m, "html anchor not found"
+        row = m.group(0)
+        new_row = (row + '\n\n'
+          '                                        <tr id="clash_panel_link">\n'
+          '                                            <td>\n'
+          '                                                <a href="javascript:on_clash_link();" id="web_clash_link"><b>Clash 控制面板</b></a>\n'
+          '                                            </td>\n'
+          '                                        </tr>')
+        s = s.replace(row, new_row, 1)
         open(p, "w").write(s)
         print("ASP patched: Clash panel link added")
         PYEOF
