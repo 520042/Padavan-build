@@ -61,6 +61,9 @@ jobs:
         ghdl "$REL/panel.html" /opt/payload/index.html
         ghdl "$REL/clash-ctl" /opt/payload/clash-ctl && chmod +x /opt/payload/clash-ctl
         ghdl "$REL/clash-web.sh" /opt/payload/clash-web.sh && chmod +x /opt/payload/clash-web.sh
+        # 后台内嵌页面(iframe 指向 9091 面板), 挂到左侧菜单「参数设置」组下
+        ghdl "$REL/Clash_Content.asp" /opt/payload/Clash_Content.asp
+        grep -q '9091' /opt/payload/Clash_Content.asp || { echo "FATAL: Clash_Content.asp 内容异常"; exit 1; }
         # GeoIP 库: 经典 clash 启动时找不到会联网下载, 证书失败即 fatal 退出
         # 这正是之前"核心崩溃导致全屋断网"的根因 -> 内置精简版(CN专用 222KB)彻底消除该依赖
         ghdl "$REL/Country.mmdb" /opt/payload/Country.mmdb
@@ -116,6 +119,21 @@ jobs:
         open(p, "w").write(s)
         print("ASP patched: Clash panel link added")
         PYEOF
+        # 2b) 后台左侧菜单加一项「Clash 控制台」(挂到"参数设置"分组)
+        #     state.js 里 tabtitle[7]/tablink[7] 就是后台左侧菜单的"参数设置"组
+        python3 - <<'PYEOF'
+        import re
+        p = "user/www/n56u_ribbon_fixed/state.js"
+        s = open(p).read()
+        s, n1 = re.subn(r'(tabtitle\[7\]\s*=\s*new Array\([^;]*?)\)\s*;',
+                        r'\1, "Clash 控制台");', s, count=1)
+        assert n1 == 1, "tabtitle[7] anchor not found"
+        s, n2 = re.subn(r'(tablink\[7\]\s*=\s*new Array\([^;]*?)\)\s*;',
+                        r'\1, "Clash_Content.asp");', s, count=1)
+        assert n2 == 1, "tablink[7] anchor not found"
+        open(p, "w").write(s)
+        print("state.js patched: Clash console menu item added")
+        PYEOF
         # 3) romfs.post 注入: strip 后 mksquashfs 前拷入 payload
         python3 - <<'PYEOF'
         old = (
@@ -131,6 +149,7 @@ jobs:
           "\tcp -f /opt/payload/clash $(ROMFSDIR)/usr/bin/clash ; \\\n"
           "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/usr/bin/clash-ctl ; \\\n"
           "\tcp -f /opt/payload/clash-web.sh $(ROMFSDIR)/usr/bin/clash-web.sh ; \\\n"
+          "\tcp -f /opt/payload/Clash_Content.asp $(ROMFSDIR)/www/Clash_Content.asp ; \\\n"
           "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
           "\tcp -f /opt/payload/index.html $(ROMFSDIR)/www2/index.html ; \\\n"
           "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
@@ -167,6 +186,12 @@ jobs:
         # 校验 ASP 页面含 Clash 入口
         rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/Advanced_Services_Content.asp" > /dev/null 2>&1
         grep -q "clash_panel_link" /tmp/sqx/www/Advanced_Services_Content.asp && echo "=== ALL PAYLOAD VERIFIED (core+panel+menu) ===" || { echo "=== ASP PATCH MISSING ==="; exit 1; }
+        # 硬校验: 左侧菜单项 + iframe 页面
+        tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx2 images/ramdisk "www/state.js" "www/Clash_Content.asp" > /dev/null 2>&1 || true
+        grep -q 'Clash_Content.asp' /tmp/sqx2/www/state.js || { echo "=== MENU ITEM MISSING (state.js) ==="; exit 1; }
+        grep -q 'Clash 控制台' /tmp/sqx2/www/state.js || { echo "=== MENU LABEL MISSING ==="; exit 1; }
+        grep -q '9091' /tmp/sqx2/www/Clash_Content.asp || { echo "=== IFRAME PAGE MISSING ==="; exit 1; }
+        echo "=== MENU + IFRAME PAGE VERIFIED ==="
         # 硬校验: busybox 编译配置里 HTTPD + CGI 真的生效 (Kconfig 依赖可能把它重置回 n)
         BBCFG=$(find user/busybox -maxdepth 2 -name ".config" 2>/dev/null | head -1)
         echo "busybox 编译配置: ${BBCFG:-未找到}"
