@@ -182,9 +182,11 @@ jobs:
         grep -q 'clash_status' /tmp/sqx/www/Advanced_Clash_Content.asp || { echo "=== NATIVE PAGE BROKEN ==="; exit 1; }
         grep -q 'ClashConf' /tmp/sqx/www/state.js || true
         echo "=== NATIVE PAGE + MENU VERIFIED ==="
-        # httpd 二进制必须含 clash ej 钩子(证明 C 补丁编进去了)
+        # httpd 二进制必须含 clash ej 钩子(证明 C 补丁编进去了) — 硬失败, 不允许 WARN
         HTPATH=$(find romfs -type f -name httpd 2>/dev/null | head -1)
-        [ -n "$HTPATH" ] && { strings -a "$HTPATH" | grep -q "clash_status" && echo "=== httpd 含 clash hooks ===" || echo "WARN: httpd 未含 clash hooks (检查 C 补丁)"; } || echo "WARN: 未找到独立 httpd (可能内置于 busybox)"
+        [ -n "$HTPATH" ] || { echo "FATAL: romfs 里找不到 httpd"; exit 1; }
+        strings -a "$HTPATH" | grep -q "clash_status" || { echo "FATAL: httpd 未含 clash hooks (C 补丁没编进去)"; exit 1; }
+        echo "=== httpd 含 clash hooks ==="
         # busybox HTTPD + CGI 编译验证
         BBCFG=$(find user/busybox -maxdepth 2 -name ".config" 2>/dev/null | head -1)
         [ -n "$BBCFG" ] || { echo "FATAL: 找不到 busybox .config"; exit 1; }
