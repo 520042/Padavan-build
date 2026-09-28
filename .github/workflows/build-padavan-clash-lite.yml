@@ -187,30 +187,36 @@ jobs:
         echo "=== payload ready ==="
         ls -la /opt/payload/
 
-    - name: Build MI-R3G (inject payload into romfs image target)
+    - name: Build MI-R3G (inject payload in romfs.post, before squashfs packing)
       env:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
-        # Patch top-level Makefile image target: copy payload into romfs
-        # AFTER romfs assembly+strip, BEFORE trx packaging.
+        # Patch top-level Makefile romfs.post: copy payload into romfs
+        # AFTER strip-romfs.sh, BEFORE vendors romfs.post runs mksquashfs.
         python3 - <<'PYEOF'
-        old = "image:\n\t[ -d $(IMAGEDIR) ] || mkdir $(IMAGEDIR)\n\t$(MAKEARCH) -C vendors image"
+        old = (
+          "romfs.post:\n"
+          "\t-find $(ROMFSDIR)/. -name CVS | xargs -r rm -rf ; \\\n"
+          "\t$(ROOTDIR)/tools/strip-romfs.sh ; \\\n"
+          "\t$(MAKEARCH) -C vendors romfs.post"
+        )
         new = (
-          "image:\n"
-          "\tmkdir -p $(ROMFSDIR)/usr/bin $(ROMFSDIR)/etc/clash/ui\n"
-          "\tcp -f /opt/payload/clash $(ROMFSDIR)/usr/bin/clash\n"
-          "\tcp -f /opt/payload/start.sh /opt/payload/clash-get.sh /opt/payload/clash-boot.sh $(ROMFSDIR)/etc/clash/\n"
-          "\tcp -f /opt/payload/config.yaml $(ROMFSDIR)/etc/clash/config.yaml\n"
-          "\tcp -rf /opt/payload/ui/. $(ROMFSDIR)/etc/clash/ui/\n"
-          "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/etc/clash/*.sh\n"
-          "\t[ -d $(IMAGEDIR) ] || mkdir $(IMAGEDIR)\n"
-          "\t$(MAKEARCH) -C vendors image"
+          "romfs.post:\n"
+          "\t-find $(ROMFSDIR)/. -name CVS | xargs -r rm -rf ; \\\n"
+          "\t$(ROOTDIR)/tools/strip-romfs.sh ; \\\n"
+          "\tcp -f /opt/payload/clash $(ROMFSDIR)/usr/bin/clash ; \\\n"
+          "\tmkdir -p $(ROMFSDIR)/etc/clash/ui ; \\\n"
+          "\tcp -f /opt/payload/start.sh /opt/payload/clash-get.sh /opt/payload/clash-boot.sh $(ROMFSDIR)/etc/clash/ ; \\\n"
+          "\tcp -f /opt/payload/config.yaml $(ROMFSDIR)/etc/clash/config.yaml ; \\\n"
+          "\tcp -rf /opt/payload/ui/. $(ROMFSDIR)/etc/clash/ui/ ; \\\n"
+          "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/etc/clash/*.sh ; \\\n"
+          "\t$(MAKEARCH) -C vendors romfs.post"
         )
         s = open("Makefile").read()
-        assert old in s, "image target not found in Makefile"
+        assert old in s, "romfs.post target not found in top Makefile"
         open("Makefile", "w").write(s.replace(old, new))
-        print("Makefile patched: payload injection added to image target")
+        print("Makefile patched: payload injection added to romfs.post (before mksquashfs)")
         PYEOF
         cp configs/templates/$TNAME.config .config
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
@@ -221,6 +227,21 @@ jobs:
         sudo ./build_firmware_modify $TNAME 0
         sudo mv images/*.trx /opt/images/
         ls -la /opt/images/
+
+    - name: Verify payload inside packed rootfs (hard gate)
+      run: |
+        cd /opt/rt-n56u/trunk
+        ls -la images/
+        # ramdisk = squashfs-lzma rootfs that gets packed into the trx
+        tools/mksquashfs_xz/unsquashfs -l images/ramdisk > /tmp/rd_list.txt 2>&1 || true
+        if grep -qE "usr/bin/clash" /tmp/rd_list.txt && grep -qE "etc/clash/start.sh" /tmp/rd_list.txt; then
+          echo "=== PAYLOAD VERIFIED IN ROOTFS ==="
+          grep -E "usr/bin/clash|etc/clash" /tmp/rd_list.txt | head -12
+        else
+          echo "=== CLASH PAYLOAD MISSING FROM ROOTFS ==="
+          grep -E "clash" /tmp/rd_list.txt | head -10
+          exit 1
+        fi
 
     - name: Upload
       uses: actions/upload-artifact@master
