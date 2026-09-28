@@ -68,8 +68,14 @@ jobs:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
-        # 1) busybox 启用 httpd applet (控制面板服务)
-        sed -i 's/# CONFIG_HTTPD is not set/CONFIG_HTTPD=y/' configs/boards/busybox.config
+        # 1) busybox 启用 httpd applet + CGI (面板按钮靠 CGI 执行, 缺一不可)
+        BB=configs/boards/busybox.config
+        sed -i 's|# CONFIG_HTTPD is not set|CONFIG_HTTPD=y|' $BB
+        sed -i 's|# CONFIG_FEATURE_HTTPD_CGI is not set|CONFIG_FEATURE_HTTPD_CGI=y|' $BB
+        sed -i 's|# CONFIG_FEATURE_HTTPD_BASIC_AUTH is not set|CONFIG_FEATURE_HTTPD_BASIC_AUTH=y|' $BB
+        grep -q '^CONFIG_HTTPD=y' $BB || { echo "FATAL: busybox CONFIG_HTTPD 未启用"; exit 1; }
+        grep -q '^CONFIG_FEATURE_HTTPD_CGI=y' $BB || { echo "FATAL: busybox CONFIG_FEATURE_HTTPD_CGI 未启用"; exit 1; }
+        echo "=== busybox HTTPD 配置 ==="; grep 'HTTPD' $BB | grep -v 'is not set'
         # 2) 主后台服务页加入 Clash 控制面板入口链接
         python3 - <<'PYEOF'
         import re
@@ -144,6 +150,18 @@ jobs:
         # 校验 ASP 页面含 Clash 入口
         rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/Advanced_Services_Content.asp" > /dev/null 2>&1
         grep -q "clash_panel_link" /tmp/sqx/www/Advanced_Services_Content.asp && echo "=== ALL PAYLOAD VERIFIED (core+panel+menu) ===" || { echo "=== ASP PATCH MISSING ==="; exit 1; }
+        # 硬校验: busybox 编译配置里 HTTPD + CGI 真的生效 (Kconfig 依赖可能把它重置回 n)
+        BBCFG=$(find user/busybox -maxdepth 2 -name ".config" 2>/dev/null | head -1)
+        echo "busybox 编译配置: ${BBCFG:-未找到}"
+        [ -n "$BBCFG" ] || { echo "FATAL: 找不到 busybox .config, 无法确认 httpd 编译结果"; exit 1; }
+        grep -q '^CONFIG_HTTPD=y' "$BBCFG" || { echo "FATAL: busybox 编译配置里 HTTPD 未生效"; exit 1; }
+        grep -q '^CONFIG_FEATURE_HTTPD_CGI=y' "$BBCFG" || { echo "FATAL: busybox 编译配置里 CGI 未生效"; exit 1; }
+        # 二进制层再确认一次: busybox 可执行文件里必须有 httpd applet 名
+        BBPATH=$(find romfs -type f -name busybox 2>/dev/null | head -1)
+        echo "busybox 二进制: ${BBPATH:-未找到}"
+        [ -n "$BBPATH" ] || { echo "FATAL: romfs 里找不到 busybox"; exit 1; }
+        strings -a "$BBPATH" | grep -qx "httpd" || { echo "FATAL: busybox 二进制里没有 httpd applet"; exit 1; }
+        echo "=== BUSYBOX HTTPD + CGI 编译验证通过 ==="
 
     - name: Upload
       uses: actions/upload-artifact@master
