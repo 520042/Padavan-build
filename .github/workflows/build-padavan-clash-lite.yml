@@ -65,7 +65,7 @@ jobs:
         # 这正是之前"核心崩溃导致全屋断网"的根因 -> 内置精简版(CN专用 222KB)彻底消除该依赖
         ghdl "$REL/Country.mmdb" /opt/payload/Country.mmdb
         [ "$(stat -c %s /opt/payload/Country.mmdb)" -gt 100000 ] || { echo "FATAL: Country.mmdb 过小"; exit 1; }
-        tail -c 64 /opt/payload/Country.mmdb | grep -q "MaxMind.com" || { echo "FATAL: Country.mmdb 不是合法 MMDB"; exit 1; }
+        grep -qa "MaxMind.com" /opt/payload/Country.mmdb || { echo "FATAL: Country.mmdb 不是合法 MMDB"; exit 1; }
         echo "Country.mmdb 就绪: $(stat -c %s /opt/payload/Country.mmdb) bytes"
         ls -la /opt/payload/
 
