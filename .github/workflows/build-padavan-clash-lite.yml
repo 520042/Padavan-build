@@ -1,4 +1,4 @@
-name: Build R3G Clash Lite
+name: Build R3G Clash Lite (WebUI Panel)
 
 on:
   workflow_dispatch:
@@ -50,150 +50,55 @@ jobs:
         tar -xf /tmp/tc.tar.xz -C toolchain-3.4.x
         mkdir -p /opt/images/
 
-    - name: Download classic clash core (2.64MB, embedded)
+    - name: Download payload (embedded core + WebUI panel from our release)
       run: |
         set -e
         mkdir -p /opt/payload
-        ghdl "https://github.com/vernesong/OpenClash/releases/download/Clash/clash-linux-mipsle-softfloat.tar.gz" /tmp/clash-core.tar.gz
+        REL="https://github.com/520042/Padavan-build/releases/download/v1.0.0"
+        ghdl "$REL/clash-linux-mipsle-softfloat.tar.gz" /tmp/clash-core.tar.gz
         cd /tmp && tar xzf clash-core.tar.gz
-        cp /tmp/clash /opt/payload/clash
-        chmod +x /opt/payload/clash
-        ls -la /opt/payload/clash
-
-    - name: Download yacd UI
-      run: |
-        set -e
-        ghdl "https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz" /tmp/yacd.tar.xz
-        cd /tmp && tar xf yacd.tar.xz
-        cp -r /tmp/public /opt/payload/ui
-        ls /opt/payload/ui | head -5
-
-    - name: Write clash payload scripts
-      run: |
-        cat > /opt/payload/config.yaml <<'CFGEOF'
-        mixed-port: 7890
-        redir-port: 7891
-        allow-lan: true
-        bind-address: '*'
-        mode: direct
-        log-level: info
-        external-controller: 0.0.0.0:9090
-        external-ui: /etc/clash/ui
-        dns:
-          enable: true
-          listen: 0.0.0.0:1053
-          enhanced-mode: fake-ip
-          fake-ip-range: 198.18.0.1/16
-          nameserver:
-            - 223.5.5.5
-            - 119.29.29.29
-        rules:
-          - MATCH,DIRECT
-        CFGEOF
-        cat > /opt/payload/start.sh <<'STARTEOF'
-        #!/bin/sh
-        # Clash start/stop: /etc/clash/start.sh [start|stop]
-        MODE="${1:-start}"
-        CLASH_DIR="/etc/storage/clash"
-        BIN_EMBED="/usr/bin/clash"
-        BIN_TMP="/tmp/mihomo/clash"
-        start() {
-            mkdir -p "$CLASH_DIR"
-            [ ! -f "$CLASH_DIR/config.yaml" ] && cp /etc/clash/config.yaml "$CLASH_DIR/config.yaml"
-            if [ -x "$BIN_TMP" ]; then
-                BIN="$BIN_TMP"; echo "Using mihomo core: $BIN"
-            elif [ -x "$BIN_EMBED" ]; then
-                BIN="$BIN_EMBED"; echo "Using embedded clash core: $BIN"
-            else
-                echo "No clash binary. Run: /etc/clash/clash-get.sh"; exit 1
-            fi
-            killall clash mihomo 2>/dev/null; sleep 1
-            cd "$CLASH_DIR" || exit 1
-            nohup "$BIN" -d "$CLASH_DIR" -f "$CLASH_DIR/config.yaml" > "$CLASH_DIR/clash.log" 2>&1 &
-            sleep 3
-            iptables -t nat -N CLASH 2>/dev/null
-            iptables -t nat -F CLASH
-            iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
-            iptables -t nat -A PREROUTING -j CLASH
-            for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
-                iptables -t nat -A CLASH -d "$net" -j RETURN
-            done
-            iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891
-            iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053
-            iptables -t nat -A PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 1053
-            echo "Clash started. UI: http://$(ip -4 addr show br0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1):9090/ui"
-        }
-        stop() {
-            killall clash mihomo 2>/dev/null
-            iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
-            iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null
-            iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null
-            iptables -t nat -F CLASH 2>/dev/null
-            iptables -t nat -X CLASH 2>/dev/null
-            echo "Clash stopped."
-        }
-        case "$MODE" in
-            start) start ;;
-            stop)  stop ;;
-            *)     echo "Usage: $0 [start|stop]" ;;
-        esac
-        STARTEOF
-        cat > /opt/payload/clash-get.sh <<'GETEOF'
-        #!/bin/sh
-        # Download/upgrade clash core: /etc/clash/clash-get.sh [tmp|recover] [ver]
-        TARGET="${1:-tmp}"
-        VER="${2:-v1.19.31}"
-        MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/$VER/mihomo-linux-mipsle-softfloat-$VER.gz"
-        CLASSIC_URL="https://github.com/vernesong/OpenClash/releases/download/Clash/clash-linux-mipsle-softfloat.tar.gz"
-        dl() {
-            url="$1"; out="$2"
-            for p in "https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/" ""; do
-                echo "[dl] trying: ${p}${url}"
-                if wget -q -T 15 -O "$out" "${p}${url}" && [ -s "$out" ]; then
-                    echo "[dl] OK"; return 0
-                fi
-                rm -f "$out"
-            done
-            return 1
-        }
-        case "$TARGET" in
-            tmp)
-                mkdir -p /tmp/mihomo
-                dl "$MIHOMO_URL" /tmp/mihomo/core.gz || { echo "download failed"; exit 1; }
-                gunzip -f /tmp/mihomo/core.gz && mv /tmp/mihomo/core /tmp/mihomo/clash
-                chmod +x /tmp/mihomo/clash
-                echo "mihomo $VER installed: /tmp/mihomo/clash"
-                ;;
-            recover)
-                mkdir -p /tmp/clash-recover
-                dl "$CLASSIC_URL" /tmp/clash-recover/core.tar.gz || { echo "download failed"; exit 1; }
-                tar -xzf /tmp/clash-recover/core.tar.gz -C /tmp/clash-recover && chmod +x /tmp/clash-recover/clash
-                cp /tmp/clash-recover/clash /usr/bin/clash 2>/dev/null || echo "core at /tmp/clash-recover/clash"
-                ;;
-            *) echo "Usage: $0 [tmp|recover] [ver]"; exit 1 ;;
-        esac
-        echo "restart to apply: /etc/clash/start.sh start"
-        GETEOF
-        cat > /opt/payload/clash-boot.sh <<'BOOTEOF'
-        #!/bin/sh
-        # Boot flow: wait 60s, auto-download mihomo core to RAM if missing, then start clash.
-        # If download fails, start.sh falls back to the embedded classic clash core.
-        (sleep 60 && {
-            [ ! -x /tmp/mihomo/clash ] && /etc/clash/clash-get.sh tmp
-            /etc/clash/start.sh start
-        }) &
-        BOOTEOF
-        chmod +x /opt/payload/*.sh
-        echo "=== payload ready ==="
+        cp /tmp/clash /opt/payload/clash && chmod +x /opt/payload/clash
+        ghdl "$REL/panel.html" /opt/payload/index.html
+        ghdl "$REL/clash-ctl" /opt/payload/clash-ctl && chmod +x /opt/payload/clash-ctl
+        ghdl "$REL/clash-web.sh" /opt/payload/clash-web.sh && chmod +x /opt/payload/clash-web.sh
         ls -la /opt/payload/
 
-    - name: Build MI-R3G (inject payload in romfs.post, before squashfs packing)
+    - name: Build MI-R3G (busybox httpd + panel + romfs injection)
       env:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
-        # Patch top-level Makefile romfs.post: copy payload into romfs
-        # AFTER strip-romfs.sh, BEFORE vendors romfs.post runs mksquashfs.
+        # 1) busybox 启用 httpd applet (控制面板服务)
+        sed -i 's/# CONFIG_HTTPD is not set/CONFIG_HTTPD=y/' configs/boards/busybox.config
+        # 2) 主后台服务页加入 Clash 控制面板入口链接
+        python3 - <<'PYEOF'
+        p = "user/www/n56u_ribbon_fixed/Advanced_Services_Content.asp"
+        s = open(p).read()
+        js_anchor = "function change_ttyd_enabled(){"
+        js_new = (
+          "function on_clash_link(){\n"
+          "\twindow.open(\"http://\"+lan_ipaddr+\":9091/\", \"clash_panel\");\n"
+          "}\n\n" + js_anchor)
+        assert js_anchor in s, "js anchor not found"
+        s = s.replace(js_anchor, js_new, 1)
+        html_anchor = '''<tr id="ttyd_webui">
+                                            <td>
+                                                <a href="javascript:on_ttyd_link();" id="web_ttyd_link">ttyd Web Shell</a>
+                                            </td>
+                                        </tr>'''
+        html_new = html_anchor + '''
+
+                                        <tr id="clash_panel_link">
+                                            <td>
+                                                <a href="javascript:on_clash_link();" id="web_clash_link"><b>Clash 控制面板</b></a>
+                                            </td>
+                                        </tr>'''
+        assert html_anchor in s, "html anchor not found"
+        s = s.replace(html_anchor, html_new, 1)
+        open(p, "w").write(s)
+        print("ASP patched: Clash panel link added")
+        PYEOF
+        # 3) romfs.post 注入: strip 后 mksquashfs 前拷入 payload
         python3 - <<'PYEOF'
         old = (
           "romfs.post:\n"
@@ -206,17 +111,18 @@ jobs:
           "\t-find $(ROMFSDIR)/. -name CVS | xargs -r rm -rf ; \\\n"
           "\t$(ROOTDIR)/tools/strip-romfs.sh ; \\\n"
           "\tcp -f /opt/payload/clash $(ROMFSDIR)/usr/bin/clash ; \\\n"
-          "\tmkdir -p $(ROMFSDIR)/etc/clash/ui ; \\\n"
-          "\tcp -f /opt/payload/start.sh /opt/payload/clash-get.sh /opt/payload/clash-boot.sh $(ROMFSDIR)/etc/clash/ ; \\\n"
-          "\tcp -f /opt/payload/config.yaml $(ROMFSDIR)/etc/clash/config.yaml ; \\\n"
-          "\tcp -rf /opt/payload/ui/. $(ROMFSDIR)/etc/clash/ui/ ; \\\n"
-          "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/etc/clash/*.sh ; \\\n"
+          "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/usr/bin/clash-ctl ; \\\n"
+          "\tcp -f /opt/payload/clash-web.sh $(ROMFSDIR)/usr/bin/clash-web.sh ; \\\n"
+          "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
+          "\tcp -f /opt/payload/index.html $(ROMFSDIR)/www2/index.html ; \\\n"
+          "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
+          "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/usr/bin/clash-ctl $(ROMFSDIR)/usr/bin/clash-web.sh $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
           "\t$(MAKEARCH) -C vendors romfs.post"
         )
         s = open("Makefile").read()
-        assert old in s, "romfs.post target not found in top Makefile"
+        assert old in s, "romfs.post target not found"
         open("Makefile", "w").write(s.replace(old, new))
-        print("Makefile patched: payload injection added to romfs.post (before mksquashfs)")
+        print("Makefile patched: payload + panel injection in romfs.post")
         PYEOF
         cp configs/templates/$TNAME.config .config
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
@@ -232,16 +138,15 @@ jobs:
       run: |
         cd /opt/rt-n56u/trunk
         ls -la images/
-        # ramdisk = squashfs-lzma rootfs that gets packed into the trx
         tools/mksquashfs_xz/unsquashfs -l images/ramdisk > /tmp/rd_list.txt 2>&1 || true
-        if grep -qE "usr/bin/clash" /tmp/rd_list.txt && grep -qE "etc/clash/start.sh" /tmp/rd_list.txt; then
-          echo "=== PAYLOAD VERIFIED IN ROOTFS ==="
-          grep -E "usr/bin/clash|etc/clash" /tmp/rd_list.txt | head -12
-        else
-          echo "=== CLASH PAYLOAD MISSING FROM ROOTFS ==="
-          grep -E "clash" /tmp/rd_list.txt | head -10
-          exit 1
-        fi
+        PASS=1
+        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash"; do
+          grep -q "$f" /tmp/rd_list.txt || { echo "MISSING: $f"; PASS=0; }
+        done
+        [ "$PASS" = "1" ] || { echo "=== PAYLOAD MISSING ==="; exit 1; }
+        # 校验 ASP 页面含 Clash 入口
+        rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/Advanced_Services_Content.asp" > /dev/null 2>&1
+        grep -q "clash_panel_link" /tmp/sqx/www/Advanced_Services_Content.asp && echo "=== ALL PAYLOAD VERIFIED (core+panel+menu) ===" || { echo "=== ASP PATCH MISSING ==="; exit 1; }
 
     - name: Upload
       uses: actions/upload-artifact@master
