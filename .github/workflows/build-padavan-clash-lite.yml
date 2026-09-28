@@ -74,6 +74,15 @@ jobs:
         TNAME: MI-R3G
       run: |
         cd /opt/rt-n56u/trunk
+        # 0) 版本号: 原 FIRMWARE_BUILDS_REV=$(shell git rev-parse --short=7 HEAD) 取的是 rt-n56u 源码哈希,
+        #    那个仓库 2021 年后就没更新过 -> 永远显示 23387b2, 没法区分固件新旧.
+        #    换成 "日期-本仓库commit"(北京时间), 刷完在后台一眼看出是哪一次构建.
+        [ -f versions.inc ] || { echo "FATAL: versions.inc 不存在"; exit 1; }
+        BUILD_REV="$(TZ='Asia/Shanghai' date +%Y%m%d)-$(echo "${GITHUB_SHA:-local}" | cut -c1-7)"
+        sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${BUILD_REV}|" versions.inc
+        grep -q "^FIRMWARE_BUILDS_REV=${BUILD_REV}$" versions.inc || { echo "FATAL: 版本号替换失败"; exit 1; }
+        echo "=== 固件版本号配置 (versions.inc) ==="
+        cat versions.inc
         # 1) busybox 启用 httpd applet + CGI (面板按钮靠 CGI 执行, 缺一不可)
         BB=configs/boards/busybox.config
         sed -i 's|# CONFIG_HTTPD is not set|CONFIG_HTTPD=y|' $BB
