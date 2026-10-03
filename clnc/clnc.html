@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CLNC 免流</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="-1">
+<link rel="shortcut icon" href="images/favicon.ico">
+<link rel="icon" href="images/favicon.png">
+<link rel="stylesheet" type="text/css" href="/bootstrap/css/bootstrap.min.css">
+<link rel="stylesheet" type="text/css" href="/bootstrap/css/main.css">
+<script type="text/javascript" src="/jquery.js"></script>
+<script type="text/javascript" src="/bootstrap/js/bootstrap.min.js"></script>
+<script type="text/javascript" src="/state.js"></script>
+<script type="text/javascript" src="/general.js"></script>
+<script type="text/javascript" src="/popup.js"></script>
+<style type="text/css">
+html{color-scheme:light}
+.cf-card{border:1px solid #dcdcdc;border-radius:4px;margin:0 0 12px 0;background:#fff}
+.cf-hd{background:#e3e3e3;padding:6px 10px;font-weight:bold;font-size:13px;color:#333}
+.cf-bd{padding:8px 10px}
+.grid{width:100%;border-collapse:collapse}
+.grid th{text-align:left;padding:5px 8px;background:#f6f6f6;border-bottom:1px solid #e8e8e8;font-weight:normal;width:170px;vertical-align:top;color:#333}
+.grid td{padding:5px 8px;border-bottom:1px solid #f1f1f1;color:#333}
+.pill{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;color:#fff;line-height:18px}
+.pill-ok{background:#3e9c46}.pill-off{background:#999}.pill-warn{background:#e08c00}.pill-err{background:#c0392b}
+.btnx{display:inline-block;padding:5px 12px;border:1px solid #aaa;border-radius:3px;background:#f8f8f8;cursor:pointer;font-size:13px;margin:2px 6px 2px 0;color:#333}
+.btnx:hover{background:#eee}
+.btnx.pri{background:#337ab7;border-color:#2e6da4;color:#fff}.btnx.pri:hover{background:#286090}
+.btnx.warn{background:#f0ad4e;border-color:#eea236;color:#fff}.btnx.warn:hover{background:#ec971f}
+.btnx.danger{background:#d9534f;border-color:#d43f3a;color:#fff}.btnx.danger:hover{background:#c9302c}
+.btnx[disabled]{opacity:.45;cursor:not-allowed}
+.inp{border:1px solid #ccc;border-radius:3px;padding:4px 6px;font-size:13px;color:#333}
+textarea.cfg{width:99%;height:360px;font-family:Menlo,Consolas,"Courier New",monospace;font-size:12px;line-height:1.35;border:1px solid #ccc;border-radius:3px;padding:6px;color:#333;background:#fbfbfb}
+.msg{margin-left:8px;font-size:13px}
+.msg.ok{color:#3c763d}.msg.err{color:#a94442}.msg.run{color:#8a6d3b}
+.hint{color:#888;font-size:12px}
+pre.log{background:#1e1e1e;color:#d4d4d4;padding:8px;border-radius:3px;max-height:300px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all}
+.banner{padding:7px 10px;border-radius:3px;margin:0 0 10px 0;font-size:13px}
+.banner.err{background:#f2dede;border:1px solid #ebccd1;color:#a94442}
+.banner.warn{background:#fcf8e3;border:1px solid #faebcc;color:#8a6d3b}
+</style>
+</head>
+
+<body onload="pageInit();">
+<div class="wrapper">
+    <div class="container-fluid" style="padding-right: 0px">
+        <div class="row-fluid">
+            <div class="span3"><center><div id="logo"></div></center></div>
+            <div class="span9"><div id="TopBanner"></div></div>
+        </div>
+    </div>
+    <div id="Loading" class="popup_bg"></div>
+
+    <div class="container-fluid">
+        <div class="row-fluid">
+            <div class="span3">
+                <div class="well sidebar-nav side_nav" style="padding: 0px;">
+                    <ul id="mainMenu" class="clearfix"></ul>
+                    <ul class="clearfix"><li><div id="subMenu" class="accordion"></div></li></ul>
+                </div>
+            </div>
+            <div class="span9">
+                <div class="row-fluid"><div class="span12">
+                    <div class="box well grad_colour_dark_blue">
+                        <h2 class="box_head round_top">CLNC 免流</h2>
+                        <div class="round_bottom"><div class="row-fluid">
+                            <div id="tabMenu" class="submenuBlock"></div>
+                            <div id="banner_panel" class="banner err" style="display:none">
+                                <b>面板服务 (9092) 未运行</b>：本页所有操作都通过它执行。
+                                <button class="btnx pri" onclick="panelBoot()">一键启动面板服务</button>
+                            </div>
+                            <div id="banner_err" class="banner err" style="display:none"></div>
+
+                            <div class="cf-card">
+                                <div class="cf-hd">运行状态</div>
+                                <div class="cf-bd">
+                                    <table class="grid">
+                                        <tr><th>核心状态</th><td id="st_run">读取中…</td></tr>
+                                        <tr><th>监听端口</th><td id="st_ports" class="hint">-</td></tr>
+                                        <tr><th>WAP 网关</th><td id="st_wap">测一下</td></tr>
+                                        <tr><th>CNS 服务器</th><td id="st_cns">测一下</td></tr>
+                                        <tr><th>面板服务</th><td id="st_panel">-</td></tr>
+                                        <tr><th>配置</th><td id="st_cfg">-</td></tr>
+                                        <tr><th>透明代理</th><td id="st_tproxy">-</td></tr>
+                                        <tr><th>开机自启</th><td id="st_astart">-</td></tr>
+                                        <tr><th>运行内存</th><td id="st_mem">-</td></tr>
+                                    </table>
+                                    <div style="margin-top:6px">
+                                        <button class="btnx pri" id="btn_start" onclick="doStart()">启动</button>
+                                        <button class="btnx warn" id="btn_stop" onclick="doStop()">停止</button>
+                                        <button class="btnx" id="btn_restart" onclick="doRestart()">重启</button>
+                                        <button class="btnx" onclick="doPing()">测 WAP/CNS 连通</button>
+                                        <button class="btnx" onclick="refreshStatus(1)">↻ 刷新状态</button>
+                                        <span id="msg_main" class="msg"></span>
+                                    </div>
+                                    <div style="margin-top:4px">
+                                        <button class="btnx pri" id="btn_tpl" onclick="doTproxyLoad()">启用透明代理（全局免设代理）</button>
+                                        <button class="btnx danger" onclick="doTproxyUnload()">🛡 解除透明代理（防断网）</button>
+                                        <span id="msg_tp" class="msg"></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="cf-card">
+                                <div class="cf-hd">配置 clnc.conf（可直接编辑，WAP 免流参数）</div>
+                                <div class="cf-bd">
+                                    <div style="margin-bottom:6px">
+                                        <button class="btnx pri" onclick="cfgLoad()">加载当前配置</button>
+                                        <button class="btnx pri" onclick="cfgSave()">校验并保存</button>
+                                        <button class="btnx" onclick="cfgBackup()">备份</button>
+                                        <button class="btnx" onclick="cfgRestore()">恢复备份</button>
+                                        <button class="btnx" onclick="cfgDownload()">下载到电脑</button>
+                                        <span id="msg_cfg" class="msg"></span>
+                                    </div>
+                                    <textarea class="cfg" id="cfg" spellcheck="false" placeholder="点「加载当前配置」读取路由器上的 clnc.conf…"></textarea>
+                                    <div class="hint">保存前会拦截 # 注释（clnc 只认 // 和 /* */，# 会被当配置解析导致启动失败）。clnc 无独立语法预检，保存后点「重启」生效。WAP 网关默认 10.0.0.200:80，CNS 服务器 152.136.154.154:443（来自 CPE 配置）。</div>
+                                </div>
+                            </div>
+
+                            <div class="cf-card">
+                                <div class="cf-hd">运行日志</div>
+                                <div class="cf-bd">
+                                    <div style="margin-bottom:6px">
+                                        <button class="btnx pri" onclick="logLoad()">刷新日志</button>
+                                        <span id="msg_log" class="msg"></span>
+                                    </div>
+                                    <pre class="log" id="log">（点「刷新日志」查看）</pre>
+                                </div>
+                            </div>
+
+                            <div class="cf-card">
+                                <div class="cf-hd">说明</div>
+                                <div class="cf-bd">
+                                    <div class="hint">
+                                        • CLNC 是独立核心，与 Clash/mihomo 互不相干、不串联。<br>
+                                        • 它提供 socks5 :1081（TCP 走 WAP 网关）作为代理入口，并接管 LAN DNS :53。<br>
+                                        • <b>UDP(httpUDP)已停用</b>：实测 clnc v1.2 收到 SOCKS5 UDP ASSOCIATE 请求会崩溃(空 reply 后进程退出)，关闭 httpUDP 段规避；UDP 不再经 clnc 转发。<br>
+                                        • 所有出网经 CPE 的 WAP 接入点(10.0.0.200)出去，无通用公网——这是 WAP APN 模式的预期，不是故障。<br>
+                                        • 配置项：dst_ip(WAP 网关)、socks5_listen(:1081)、dns_listen(:53)。
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div></div>
+                    </div>
+                </div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+var API = location.protocol + '//' + location.hostname + ':9092/cgi-bin/clnc';
+var POLL_MS = 5000;
+var busy = 0;
+
+function gx(id) { return document.getElementById(id); }
+function txt(id, v) { var e = gx(id); if (e) e.innerHTML = v; }
+function setMsg(id, text, cls) {
+    var e = gx(id); if (!e) return;
+    e.className = 'msg' + (cls ? ' ' + cls : '');
+    e.textContent = text || '';
+}
+
+/* 统一请求封装(带超时, 任何失败都只是显示错误, 不会卡住页面) */
+function api(action, body, ok, err, tmo) {
+    var ctl = null, tid = null;
+    var opt = { method: (body === null || body === undefined) ? 'GET' : 'POST', cache: 'no-store' };
+    try { ctl = new AbortController(); opt.signal = ctl.signal; tid = setTimeout(function(){ ctl.abort(); }, tmo || 60000); } catch (e) {}
+    if (body !== null && body !== undefined) opt.body = String(body);
+    return fetch(API + '?action=' + action, opt).then(function (r) {
+        if (tid) clearTimeout(tid);
+        return r.text();
+    }).then(function (t) { if (ok) ok(t); }).catch(function (e) {
+        if (tid) clearTimeout(tid);
+        if (err) err(e); else panelError(e);
+    });
+}
+function panelError(e) {
+    var b = gx('banner_panel'); if (b) b.style.display = 'block';
+    txt('st_run', '<span class="pill pill-err">面板服务无响应</span>');
+    setMsg('msg_main', '面板服务(9092)无响应: ' + (e && e.message ? e.message : e), 'err');
+}
+function lock(v) {
+    busy = v ? 1 : 0;
+    var ids = ['btn_start', 'btn_stop', 'btn_restart'];
+    for (var i = 0; i < ids.length; i++) { var e = gx(ids[i]); if (e) e.disabled = v ? true : false; }
+    if (!v) syncButtons();
+}
+function syncButtons() {
+    if (busy) return;
+    var run = gx('btn_stop') && gx('btn_stop').dataset.run === '1';
+    if (gx('btn_start')) gx('btn_start').disabled = !!run;
+    if (gx('btn_stop')) gx('btn_stop').disabled = !run;
+}
+
+function pageInit() {
+    if (typeof show_banner === 'function') { try { show_banner(2); } catch (e) {} }
+    if (typeof show_menu === 'function') { try { show_menu(5, 16, 1); } catch (e) {} }
+    if (typeof show_footer === 'function') { try { show_footer(); } catch (e) {} }
+    else { fallbackChrome(); }
+    refreshStatus(0);
+    pollTimer = setInterval(function () {
+        if (document.hidden) return;
+        refreshStatus(0);
+    }, POLL_MS);
+}
+function fallbackChrome() {
+    var s = document.createElement('style'); s.type = 'text/css';
+    s.innerHTML = '.wrapper{max-width:1180px;margin:0 auto;padding:10px}'
+        + '.row-fluid{width:100%}.row-fluid:after{content:"";display:table;clear:both}'
+        + '.span3{float:left;width:22%}.span9{float:left;width:76%;margin-left:2%}'
+        + '.container-fluid{padding:0 10px}'
+        + '.side_nav{background:#eee;border:1px solid #ddd;border-radius:4px;min-height:20px;padding:6px}'
+        + '.grad_colour_dark_blue{border:1px solid #2b6ea8;border-radius:4px;overflow:hidden;background:#fff}'
+        + '.box_head{background:#2b6ea8;color:#fff;font-size:15px;margin:0;padding:8px 12px}'
+        + '.round_bottom{padding:10px}'
+        + '@media(max-width:700px){.span3,.span9{float:none;width:auto;margin-left:0}}';
+    document.getElementsByTagName('head')[0].appendChild(s);
+}
+
+function refreshStatus(manual) {
+    if (busy) return;
+    api('status', null, function (t) {
+        var s; try { s = JSON.parse(t); } catch (e) { panelError({ message: '返回内容异常' }); return; }
+        render(s);
+        if (manual) setMsg('msg_main', '状态已刷新', 'ok');
+    }, panelError, 15000);
+}
+function render(s) {
+    lastStatus = s;
+    if (gx('banner_panel')) gx('banner_panel').style.display = s.panel ? 'none' : 'block';
+    var b = gx('btn_stop'); if (b) b.dataset.run = s.run ? '1' : '0';
+    syncButtons();
+    txt('st_run', s.run
+        ? '<span class="pill pill-ok">运行中</span> <span class="hint">PID ' + s.pid + '</span>'
+        : '<span class="pill pill-off">已停止</span>');
+    var ports = [];
+    if (s.listen1081) ports.push('socks5 TCP/UDP :1081');
+    if (s.listen6650) ports.push('tcp :6650');
+    if (s.listen53) ports.push('dns UDP :53');
+    txt('st_ports', ports.length ? ports.join(' · ') : '<span class="pill pill-off">未监听</span>');
+    txt('st_panel', s.panel ? '<span class="pill pill-ok">9092 运行中</span>' : '<span class="pill pill-off">未运行</span>');
+    txt('st_cfg', (s.bin ? '二进制✓ ' : '<span class="pill pill-err">二进制缺失</span> ')
+        + (s.conf ? '配置✓' : '<span class="pill pill-err">配置缺失</span>')
+        + ' <span class="hint">WAP=' + (s.dst || '-') + ' CNS=' + (s.cnsserver || '-') + '</span>');
+    txt('st_tproxy', s.tproxy
+        ? '<span class="pill pill-ok">已启用</span> <span class="hint">LAN 设备 80/443/8080 已劫持到 :6650，全局免设代理</span>'
+        : '<span class="pill pill-off">未启用</span> <span class="hint">需手动设代理才能上网</span>');
+    if (gx('btn_tpl')) gx('btn_tpl').disabled = s.tproxy ? true : false;
+    txt('st_astart', s.astart ? '<span class="pill pill-ok">已开</span>' : '<span class="pill pill-off">关</span>');
+    txt('st_mem', (function(n){ try { return (n*1024/1048576).toFixed(1) + ' MB'; } catch(e){ return n; } })(s.mem) + ' ｜ 开机 ' + Math.floor(s.uptime/3600) + ' 小时');
+}
+
+function doStart() { lock(1); setMsg('msg_main','启动中…','run'); api('start', null, function(t){ setMsg('msg_main', t.replace(/\n/g,' '),'ok'); }, function(e){ setMsg('msg_main','启动失败: '+e,'err'); }, 30000); setTimeout(function(){ lock(0); refreshStatus(0); }, 4000); }
+function doStop() { lock(1); setMsg('msg_main','停止中…','run'); api('stop', null, function(t){ setMsg('msg_main', t.replace(/\n/g,' '),'ok'); }, function(e){ setMsg('msg_main','停止失败: '+e,'err'); }, 20000); setTimeout(function(){ lock(0); refreshStatus(0); }, 3000); }
+function doRestart() { lock(1); setMsg('msg_main','重启中…','run'); api('restart', null, function(t){ setMsg('msg_main', t.replace(/\n/g,' '),'ok'); }, function(e){ setMsg('msg_main','重启失败: '+e,'err'); }, 30000); setTimeout(function(){ lock(0); refreshStatus(0); }, 5000); }
+
+function doTproxyLoad() {
+    setMsg('msg_tp','正在启用透明代理…','run');
+    api('tpload', null, function(t){ setMsg('msg_tp', t.replace(/\n/g,' '),'ok'); refreshStatus(0); }, function(e){ setMsg('msg_tp','启用失败: '+e,'err'); }, 20000);
+}
+function doTproxyUnload() {
+    setMsg('msg_tp','正在解除透明代理…','run');
+    api('tpunload', null, function(t){ setMsg('msg_tp', t.replace(/\n/g,' '),'ok'); refreshStatus(0); }, function(e){ setMsg('msg_tp','解除失败: '+e,'err'); }, 15000);
+}
+
+function doPing() {
+    setMsg('msg_main','连通测试中…','run');
+    txt('st_wap', '<span class="pill pill-warn">测试中</span>');
+    txt('st_cns', '<span class="pill pill-warn">测试中</span>');
+    api('ping', null, function (t) {
+        var p; try { p = JSON.parse(t); } catch (e) { setMsg('msg_main','测试结果异常','err'); return; }
+        txt('st_wap', p.wap ? '<span class="pill pill-ok">可达</span> <span class="hint">10.0.0.200</span>' : '<span class="pill pill-err">不可达</span>');
+        txt('st_cns', p.cns ? '<span class="pill pill-ok">可达</span> <span class="hint">152.136.154.154</span>' : '<span class="pill pill-err">不可达</span>');
+        setMsg('msg_main', (p.wap && p.cns) ? 'WAP 与 CNS 均可达，免流链路通了' : 'WAP/CNS 不通：请在 CPE 侧把 WAP 接入点桥好，使路由器能路由到 10.0.0.200 / 152.136.154.154', (p.wap && p.cns) ? 'ok' : 'err');
+    }, function (e) { setMsg('msg_main','测试失败: '+e,'err'); }, 20000);
+}
+
+function panelBoot() {
+    api('panelboot', null, function(t){ setMsg('msg_main', t.replace(/\n/g,' '),'ok'); refreshStatus(0); }, function(e){ setMsg('msg_main','启动失败: '+e,'err'); }, 20000);
+}
+
+function cfgLoad() {
+    api('getcfg', null, function(t){ gx('cfg').value = t; setMsg('msg_cfg','已加载','ok'); }, function(e){ setMsg('msg_cfg','加载失败: '+e,'err'); }, 15000);
+}
+function cfgSave() {
+    var v = gx('cfg').value;
+    setMsg('msg_cfg','保存中…','run');
+    api('savecfg', v, function(t){ setMsg('msg_cfg', t.replace(/\n/g,' '), t.indexOf('未过')>=0?'err':'ok'); refreshStatus(0); }, function(e){ setMsg('msg_cfg','保存失败: '+e,'err'); }, 20000);
+}
+function cfgBackup() { api('backup', null, function(t){ setMsg('msg_cfg', t.replace(/\n/g,' '),'ok'); }, function(e){ setMsg('msg_cfg','失败: '+e,'err'); }, 10000); }
+function cfgRestore() { api('restore', null, function(t){ setMsg('msg_cfg', t.replace(/\n/g,' '),'ok'); refreshStatus(0); }, function(e){ setMsg('msg_cfg','失败: '+e,'err'); }, 10000); }
+function cfgDownload() {
+    var v = gx('cfg').value || '';
+    var blob = new Blob([v], { type: 'text/plain' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'clnc.conf';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setMsg('msg_cfg','已下载 clnc.conf','ok');
+}
+function logLoad() {
+    api('log', null, function(t){ gx('log').textContent = t; setMsg('msg_log','已刷新','ok'); }, function(e){ setMsg('msg_log','加载失败: '+e,'err'); }, 15000);
+}
+</script>
+</body>
+</html>

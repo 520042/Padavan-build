@@ -1,0 +1,37 @@
+# ============================================================
+# 强制 shell 脚本保持 LF —— 关键!
+# busybox sh 不认 CRLF, 脚本被 CRLF 转换后会报
+# "syntax error: unexpected word" 而完全无法执行。
+# Windows 上开发必须用 LF 写入 + 本文件强制约束。
+# ============================================================
+
+# 所有 .sh 强制 LF, 且 git 不做换行转换
+*.sh    text eol=lf
+
+# clnc 目录下所有脚本(即使将来改名不带 .sh)同样强制 LF
+clnc/clnc-tproxy.sh    text eol=lf
+clnc/clnc-ctl          text eol=lf
+clnc/cgi_clnc          text eol=lf
+clnc/clnc.sh           text eol=lf
+clnc/clnc-web.sh       text eol=lf
+clnc-web/start.sh      text eol=lf
+clash-web.sh           text eol=lf
+clash-ctl              text eol=lf
+
+# 二进制文件不做任何换行转换
+clnc/clnc    binary
+clash        binary
+*.trx        binary
+*.bin        binary
+*.mmdb       binary
+*.gz         binary
+*.tgz        binary
+*.xz         binary
+*.zip        binary
+
+# 网页/HTML 用 LF(避免首行多出 ^M)
+*.html       text eol=lf
+*.asp        text eol=lf
+*.js         text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf

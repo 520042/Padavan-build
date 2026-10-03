@@ -1,0 +1,175 @@
+#!/bin/sh
+# ============================================================
+# clnc 控制后端 (CGI + 命令行双用)
+# 部署位置: /etc/storage/clnc-web/clnc-ctl   (可写分区, 改它不用刷固件)
+# CGI 包装: /etc/storage/clnc-web/cgi-bin/clnc  (负责输出 HTTP 头)
+# 命令行用法: QUERY_STRING='action=status' sh clnc-ctl
+# POST 参数: head -c $CONTENT_LENGTH  (body 内容随 action 而定)
+#
+# 与 clash-ctl 完全同构; clnc 是独立核心, 本文件不碰 clash, 互不串联.
+# 注意: 本文件是 shell 脚本, # 是 shell 注释(合法); 只有 clnc.conf 里不能用 # (那是 clnc 语法, 见 savecfg 守护)
+# ============================================================
+
+D=/etc/storage/clnc
+BIN=$D/clnc
+CONF=$D/clnc.conf
+SH=$D/clnc.sh
+LOG=$D/clnc.log
+WEBHOME=/etc/storage/clnc-web
+PID=/tmp/clnc.pid
+PORT=1081
+TPROXY=/etc/storage/clnc/clnc-tproxy.sh
+
+ACTION=$(printf '%s' "$QUERY_STRING" | sed -n 's/.*action=\([^&]*\).*/\1/p')
+if [ -z "$ACTION" ] && [ -n "$1" ]; then ACTION="$1"; fi
+
+# JSON 字符串清洗 (只用于把用户输入/日志塞进 JSON)
+json_s() {
+    printf '%s' "$1" | sed 's/[\\"]//g' | tr '\r\n' '  ' | cut -c1-200
+}
+
+# clnc 只在进程行带 "-c" 时才是真二进制(clnc.sh 自身路径也含 "clnc", 会误匹配)
+is_run() { ps w 2>/dev/null | grep -qE "[c]lnc -c"; }
+
+# ---------------- 动作分发 ----------------
+case "$ACTION" in
+
+# ===== 状态 (轻量, 不 ping, 供轮询) =====
+status)
+    RUN=0; PIDN=0
+    PL=$(ps w 2>/dev/null | grep -E "[c]lnc -c" | head -1)
+    if [ -n "$PL" ]; then RUN=1; PIDN=$(printf '%s' "$PL" | awk '{print $1}'); fi
+    [ -n "$PIDN" ] || PIDN=0
+    L1081=0; L6650=0; L53=0
+    netstat -ln 2>/dev/null | grep -q ":1081 " && L1081=1
+    netstat -ln 2>/dev/null | grep -q ":6650 " && L6650=1
+    # clnc 已改听 0.0.0.0:53 (UDP, 接管 DNS, 不再监听 :6653); 故探测 :53
+    netstat -ln 2>/dev/null | grep -q ":53 " && L53=1
+    [ -x "$BIN" ] && BINOK=1 || BINOK=0
+    [ -f "$CONF" ] && CONF_OK=1 || CONF_OK=0
+    PANEL=0
+    ps w 2>/dev/null | grep -q "[h]ttpd -p 9092" && PANEL=1
+    DST=$(grep -E "^dst_ip" "$CONF" 2>/dev/null | head -1 | sed 's/.*= *//; s/;.*//' | tr -d ' ')
+    CNS_S=$(grep -E "^cns_server" "$CONF" 2>/dev/null | head -1 | sed 's/.*= *//; s/;.*//' | tr -d ' ')
+    MEM=$(free 2>/dev/null | awk 'NR==2{print $3}'); [ -n "$MEM" ] || MEM=0
+    UP=$(cut -d. -f1 /proc/uptime 2>/dev/null); [ -n "$UP" ] || UP=0
+    FIRM=$(nvram get firmver 2>/dev/null); EXT=$(nvram get extendno 2>/dev/null)
+    [ -n "$EXT" ] && FIRM="$FIRM-$EXT"; [ -n "$FIRM" ] || FIRM="-"
+    ASTART=0
+    if [ -f /etc/storage/started_script.sh ] && grep -q clnc-web /etc/storage/started_script.sh 2>/dev/null; then ASTART=1; fi
+    TPX=0
+    iptables -t nat -S CLNCTPROXY 2>/dev/null | grep -q REDIRECT && TPX=1
+    printf '{"ok":true,"run":%d,"pid":%s,"bin":%d,"conf":%d,"listen1081":%d,"listen6650":%d,"listen53":%d,"panel":%d,"dst":"%s","cnsserver":"%s","mem":%s,"uptime":%s,"ver":"%s","astart":%d,"tproxy":%d}\n' \
+        "$RUN" "$PIDN" "$BINOK" "$CONF_OK" "$L1081" "$L6650" "$L53" "$PANEL" "$DST" "$CNS_S" "$MEM" "$UP" "$FIRM" "$ASTART" "$TPX"
+    ;;
+
+# ===== 连通性测试 (WAP 网关 / CNS VPS) =====
+ping)
+    ping -c2 -W2 10.0.0.200 >/tmp/.clnc_ping_wap 2>&1
+    ping -c2 -W2 152.136.154.154 >/tmp/.clnc_ping_cns 2>&1
+    # 注意: 不能用 grep "0% packet loss" —— "100% packet loss" 也含 "0% packet loss" 子串, 会把全丢包误判成可达.
+    # 正确判据: 收到包数 >=1 (正则 [1-9][0-9]* packets received). "0 packets received" 则不匹配 -> 不可达.
+    WAP=$(grep -qE "[1-9][0-9]* packets received" /tmp/.clnc_ping_wap 2>/dev/null && echo 1 || echo 0)
+    CNS=$(grep -qE "[1-9][0-9]* packets received" /tmp/.clnc_ping_cns 2>/dev/null && echo 1 || echo 0)
+    printf '{"wap":%s,"cns":%s,"wap_txt":"%s","cns_txt":"%s"}\n' \
+        "$WAP" "$CNS" "$(json_s "$(cat /tmp/.clnc_ping_wap 2>/dev/null)")" "$(json_s "$(cat /tmp/.clnc_ping_cns 2>/dev/null)")"
+    ;;
+
+# ===== 核心控制 =====
+start)
+    sh "$SH" start 2>&1 | tail -3
+    ;;
+stop)
+    sh "$SH" stop 2>&1 | tail -1
+    ;;
+restart)
+    sh "$SH" restart 2>&1 | tail -3
+    ;;
+
+# ===== 面板服务 (9092) 自愈 =====
+panelboot)
+    if ps w 2>/dev/null | grep -q "[h]ttpd -p 9092"; then
+        echo "面板服务已在运行 (9092)"
+        exit 0
+    fi
+    H=/etc/storage/clnc-web
+    mkdir -p "$H/cgi-bin"
+    [ -f "$H/clnc-ctl" ] || cp -f /usr/bin/clnc-ctl "$H/clnc-ctl" 2>/dev/null
+    chmod +x "$H/clnc-ctl" 2>/dev/null
+    printf '#!/bin/sh\nprintf "Content-Type: text/plain; charset=utf-8\\r\\nCache-Control: no-store\\r\\nAccess-Control-Allow-Origin: *\\r\\n\\r\\n"\nexec /etc/storage/clnc-web/clnc-ctl\n' > "$H/cgi-bin/clnc"
+    chmod +x "$H/cgi-bin/clnc"
+    ( nohup busybox httpd -p 9092 -h "$H" >/dev/null 2>&1 & )
+    sleep 2
+    if ps w 2>/dev/null | grep -q "[h]ttpd -p 9092"; then
+        echo "面板服务已启动 (9092)"
+    else
+        echo "面板服务启动失败, 请检查存储分区"
+    fi
+    ;;
+
+# ===== 配置 =====
+getcfg)
+    cat "$CONF" 2>/dev/null || echo "(配置不存在, 点启动会依赖已有 clnc.conf)"
+    ;;
+savecfg)
+    TMPCFG=/tmp/clnc.conf.new
+    CL=$(printf '%s' "$CONTENT_LENGTH" | tr -d '\r\n ')
+    if [ -n "$CL" ] && [ "$CL" -gt 0 ] 2>/dev/null; then
+        head -c "$CL" > "$TMPCFG" 2>/dev/null
+    else
+        echo "未收到内容"; exit 0
+    fi
+    [ -s "$TMPCFG" ] || { echo "未收到内容"; exit 0; }
+    # 守护: clnc 只认 // 和 /* */ 注释, # 会被当配置解析 -> error line 直接退出. 保存前拦掉.
+    if grep -qE '^[[:space:]]*#' "$TMPCFG" 2>/dev/null; then
+        rm -f "$TMPCFG"
+        echo "配置校验未过: 含 # 注释(行首)。clnc 不支持 # 注释, 请改成 // 或 /* */ 后再保存"
+        exit 0
+    fi
+    [ -f "$CONF" ] && cp -f "$CONF" "$CONF.bak"
+    mv -f "$TMPCFG" "$CONF"
+    chmod 666 "$CONF" 2>/dev/null
+    echo "配置已保存(已自动备份到 clnc.conf.bak)。点「重启 clnc」生效"
+    ;;
+backup)
+    if [ -f "$CONF" ]; then cp -f "$CONF" "$CONF.bak"; echo "已备份当前配置到 clnc.conf.bak"; else echo "无配置可备份"; fi
+    ;;
+restore)
+    if [ -f "$CONF.bak" ]; then cp -f "$CONF.bak" "$CONF"; echo "已从备份恢复(点重启生效)"; else echo "无备份文件"; fi
+    ;;
+
+# ===== 透明代理 (TCP REDIRECT -> :6650) =====
+# 让 LAN 内设备连上 WiFi 直接上网, 无需逐台设代理。
+# 手动解除防断网: 面板点 "解除透明代理"。
+tproxy)
+    RUN=0; PIDN=0
+    PL=$(ps w 2>/dev/null | grep -E "[c]lnc -c" | head -1)
+    if [ -n "$PL" ]; then RUN=1; PIDN=$(printf '%s' "$PL" | awk '{print $1}'); fi
+    [ -n "$PIDN" ] || PIDN=0
+    TPX=0
+    iptables -t nat -S CLNCTPROXY 2>/dev/null | grep -q REDIRECT && TPX=1
+    WD=0
+    ps w 2>/dev/null | grep -q "[c]lnc-tproxy.sh watch" && WD=1
+    HS=0
+    [ -x "$TPROXY" ] && HS=1
+    printf '{"ok":true,"run":%d,"pid":%s,"tproxy":%d,"watchdog":%d,"has_script":%d}\n' \
+        "$RUN" "$PIDN" "$TPX" "$WD" "$HS"
+    ;;
+tpload)
+    if [ ! -x "$TPROXY" ]; then echo "透明代理脚本不存在: $TPROXY"; exit 0; fi
+    sh "$TPROXY" load 2>&1 | tail -2
+    ;;
+tpunload)
+    if [ ! -x "$TPROXY" ]; then echo "透明代理脚本不存在: $TPROXY"; exit 0; fi
+    sh "$TPROXY" unload 2>&1 | tail -1
+    ;;
+
+# ===== 日志 =====
+log)
+    tail -80 "$LOG" 2>/dev/null || echo "(日志为空)"
+    ;;
+
+*)
+    echo "unknown action: $ACTION"
+    ;;
+esac

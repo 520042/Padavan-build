@@ -64,8 +64,17 @@ jobs:
         # 原生 Padavan 设置页 (照 hanwckf 自带 Shadowsocks.asp 模式)
         ghdl "$REL/Advanced_Clash_Content.asp" /opt/payload/Advanced_Clash_Content.asp
         ghdl "$REL/Clash_action.asp" /opt/payload/Clash_action.asp
-        grep -q 'clash_status' /opt/payload/Advanced_Clash_Content.asp || { echo "FATAL: Advanced_Clash_Content.asp 内容异常"; exit 1; }
+        # 页面是"纯静态 + AJAX 调 9091 后端", 不再有 ASP 服务端标签, 校验关键锚点
+        grep -q '9091/cgi-bin/clash' /opt/payload/Advanced_Clash_Content.asp || { echo "FATAL: 页面缺后端地址"; exit 1; }
+        grep -q "api('saveconfig'" /opt/payload/Advanced_Clash_Content.asp || { echo "FATAL: 页面缺 YAML 保存"; exit 1; }
+        grep -q "api('dlcore'" /opt/payload/Advanced_Clash_Content.asp || { echo "FATAL: 页面缺 mihomo 下载入口"; exit 1; }
+        if grep -q '<%' /opt/payload/Advanced_Clash_Content.asp; then echo "FATAL: 页面残留 ASP 标签"; exit 1; fi
         grep -q 'clash_action' /opt/payload/Clash_action.asp || { echo "FATAL: Clash_action.asp 内容异常"; exit 1; }
+        # 后端脚本: CORS(让 80 端口页面能直接调 9091) + 面板自愈 + 下载进度
+        grep -q 'Access-Control-Allow-Origin' /opt/payload/clash-web.sh || { echo "FATAL: clash-web.sh 缺 CORS"; exit 1; }
+        grep -q 'panelboot' /opt/payload/clash-ctl || { echo "FATAL: clash-ctl 缺 panelboot"; exit 1; }
+        grep -q 'Access-Control-Allow-Origin' /opt/payload/clash-ctl || { echo "FATAL: clash-ctl 缺 CORS"; exit 1; }
+        grep -q 'external-ui: \$W/ui' /opt/payload/clash-ctl || { echo "FATAL: clash-ctl 缺 external-ui 规范化(mihomo 兼容)"; exit 1; }
         # C 源码补丁脚本 (variables.c + web_ex.c)
         ghdl "$REL/native_patch.py" /opt/payload/native_patch.py
         grep -q 'clash_action_hook' /opt/payload/native_patch.py || { echo "FATAL: native_patch.py 内容异常"; exit 1; }
@@ -75,6 +84,31 @@ jobs:
         [ "$(stat -c %s /opt/payload/Country.mmdb)" -gt 100000 ] || { echo "FATAL: Country.mmdb 过小"; exit 1; }
         grep -qa "MaxMind.com" /opt/payload/Country.mmdb || { echo "FATAL: Country.mmdb 不是合法 MMDB"; exit 1; }
         echo "Country.mmdb 就绪: $(stat -c %s /opt/payload/Country.mmdb) bytes"
+        # yacd 面板直接用仓库内文件(已随 checkout 就位) —— 本机 .tar.gz 会被劫持改写, Release/镜像又不可靠, 入库才稳
+        [ "$(stat -c %s "$GITHUB_WORKSPACE/ui.tar.gz")" -gt 300000 ] || { echo "FATAL: ui.tar.gz 过小"; exit 1; }
+        tar -tzf "$GITHUB_WORKSPACE/ui.tar.gz" >/dev/null 2>&1 || { echo "FATAL: ui.tar.gz 不是合法 gzip tar (可能被透明代理劫持改写, 请本地清空代理后重新生成)"; exit 1; }
+        mkdir -p /opt/payload/ui && tar -xzf "$GITHUB_WORKSPACE/ui.tar.gz" -C /opt/payload/ui
+        [ -f /opt/payload/ui/index.html ] || { echo "FATAL: ui.tar.gz 缺 index.html"; exit 1; }
+        echo "yacd 就绪: $(find /opt/payload/ui -type f | wc -l) 个文件"
+        # clnc 资产(走仓库内, 与 yacd 同理, 不依赖 Release/镜像)
+        [ -f "$GITHUB_WORKSPACE/clnc/clnc" ] || { echo "FATAL: clnc 二进制缺失"; exit 1; }
+        [ -f "$GITHUB_WORKSPACE/clnc/clnc-ctl" ] || { echo "FATAL: clnc-ctl 缺失"; exit 1; }
+        [ -f "$GITHUB_WORKSPACE/clnc/clnc.html" ] || { echo "FATAL: clnc.html 缺失"; exit 1; }
+        [ -f "$GITHUB_WORKSPACE/clnc/clnc-tproxy.sh" ] || { echo "FATAL: clnc-tproxy.sh 缺失"; exit 1; }
+        [ -f "$GITHUB_WORKSPACE/clnc/cgi_clnc" ] || { echo "FATAL: cgi_clnc 缺失"; exit 1; }
+        cp -rf "$GITHUB_WORKSPACE/clnc/." /opt/payload/
+        chmod +x /opt/payload/clnc /opt/payload/clnc-ctl /opt/payload/clnc-tproxy.sh
+        # clnc 页面是纯静态 + AJAX 调 9092 后端, 无 ASP 标签, 无 C 补丁(与 clash 解耦)
+        grep -q '9092/cgi-bin/clnc' /opt/payload/clnc.html || { echo "FATAL: clnc 页面缺后端地址"; exit 1; }
+        if grep -q '<%' /opt/payload/clnc.html; then echo "FATAL: clnc 页面残留 ASP 标签"; exit 1; fi
+        grep -q 'Access-Control-Allow-Origin' /opt/payload/clnc-ctl || { echo "FATAL: clnc-ctl 缺 CORS"; exit 1; }
+        grep -q 'panelboot' /opt/payload/clnc-ctl || { echo "FATAL: clnc-ctl 缺 panelboot"; exit 1; }
+        # 透明代理脚本自检: 必须有 load/watch/RETURN 语义(RETURN 放过排除段, 勿写成 REDIRECT 的 -d 条件)
+        grep -q 'CLNCTPROXY' /opt/payload/clnc-tproxy.sh || { echo "FATAL: clnc-tproxy.sh 缺 CLNCTPROXY 链"; exit 1; }
+        grep -q -- '-j RETURN' /opt/payload/clnc-tproxy.sh || { echo "FATAL: clnc-tproxy.sh 缺 RETURN(排除段语义)"; exit 1; }
+        grep -q 'clnc-tproxy.sh watch' /opt/payload/clnc-tproxy.sh || { echo "FATAL: clnc-tproxy.sh 缺看门狗"; exit 1; }
+        grep -q 'is_run' /opt/payload/clnc-ctl || { echo "FATAL: clnc-ctl 内容异常"; exit 1; }
+        echo "clnc 资产就绪: $(stat -c %s /opt/payload/clnc) bytes 二进制"
         ls -la /opt/payload/
 
     - name: Build MI-R3G (native WebUI + C patches + romfs injection)
@@ -125,6 +159,24 @@ jobs:
         print("state.js patched: native Clash menu item added (L2 index 15)")
         PYEOF
         grep -q 'Advanced_Clash_Content.asp' user/www/n56u_ribbon_fixed/state.js || { echo "FATAL: state.js 菜单补丁未生效"; exit 1; }
+        # 3b) 后台左侧菜单加「CLNC」项 (紧跟 Clash 之后, L2 index 16, 与 clash 解耦: 纯 AJAX 调 9092, 无 C 补丁)
+        python3 - <<'PYEOF'
+        p = "user/www/n56u_ribbon_fixed/state.js"
+        s = open(p).read()
+        a1 = 'clash_array = new Array("", "Advanced_Clash_Content.asp");\ntabtitle[14] = new Array("", "Clash");\ntablink[14] = (clash_array);'
+        assert a1 in s, "clash tabtitle anchor not found"
+        s = s.replace(a1, a1 + '\nclnc_array = new Array("", "Advanced_Clnc_Content.asp");\ntabtitle[15] = new Array("", "CLNC");\ntablink[15] = (clnc_array);', 1)
+        a2 = 'menuL2_title.push("Clash");'
+        assert a2 in s, "menuL2_title Clash anchor not found"
+        s = s.replace(a2, a2 + '\nmenuL2_title.push("CLNC");', 1)
+        a3 = 'menuL2_link.push(clash_array[1]);'
+        assert a3 in s, "menuL2_link Clash anchor not found"
+        s = s.replace(a3, a3 + '\nmenuL2_link.push(clnc_array[1]);', 1)
+        open(p, "w").write(s)
+        print("state.js patched: native CLNC menu item added (L2 index 16)")
+        PYEOF
+        grep -q 'Advanced_Clnc_Content.asp' user/www/n56u_ribbon_fixed/state.js || { echo "FATAL: state.js CLNC 菜单补丁未生效"; exit 1; }
+        grep -q 'menuL2_title.push("CLNC")' user/www/n56u_ribbon_fixed/state.js || { echo "FATAL: CLNC 菜单标签缺失"; exit 1; }
         # 4) romfs.post 注入: strip 后 mksquashfs 前拷入 payload
         python3 - <<'PYEOF'
         old = (
@@ -145,9 +197,19 @@ jobs:
           "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
           "\tcp -f /opt/payload/index.html $(ROMFSDIR)/www2/index.html ; \\\n"
           "\tcp -f /opt/payload/clash-ctl $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
+          "\tmkdir -p $(ROMFSDIR)/www2/ui ; \\\n"
+          "\tcp -rf /opt/payload/ui/. $(ROMFSDIR)/www2/ui/ ; \\\n"
           "\tmkdir -p $(ROMFSDIR)/usr/share/clash ; \\\n"
           "\tcp -f /opt/payload/Country.mmdb $(ROMFSDIR)/usr/share/clash/Country.mmdb ; \\\n"
           "\tchmod 755 $(ROMFSDIR)/usr/bin/clash $(ROMFSDIR)/usr/bin/clash-ctl $(ROMFSDIR)/usr/bin/clash-web.sh $(ROMFSDIR)/www2/cgi-bin/clash ; \\\n"
+          "\tcp -f /opt/payload/clnc $(ROMFSDIR)/usr/bin/clnc ; \\\n"
+          "\tcp -f /opt/payload/clnc-ctl $(ROMFSDIR)/usr/bin/clnc-ctl ; \\\n"
+          "\tcp -f /opt/payload/clnc-tproxy.sh $(ROMFSDIR)/usr/bin/clnc-tproxy.sh ; \\\n"
+          "\tcp -f /opt/payload/clnc.html $(ROMFSDIR)/www/Advanced_Clnc_Content.asp ; \\\n"
+          "\tcp -f /opt/payload/clnc.html $(ROMFSDIR)/www2/clnc.html ; \\\n"
+          "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
+          "\tcp -f /opt/payload/cgi_clnc $(ROMFSDIR)/www2/cgi-bin/clnc ; \\\n"
+          "\tchmod 755 $(ROMFSDIR)/usr/bin/clnc $(ROMFSDIR)/usr/bin/clnc-ctl $(ROMFSDIR)/usr/bin/clnc-tproxy.sh $(ROMFSDIR)/www2/cgi-bin/clnc ; \\\n"
           "\t$(MAKEARCH) -C vendors romfs.post"
         )
         s = open("Makefile").read()
@@ -171,15 +233,29 @@ jobs:
         ls -la images/
         tools/mksquashfs_xz/unsquashfs -l images/ramdisk > /tmp/rd_list.txt 2>&1 || true
         PASS=1
-        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "usr/share/clash/Country.mmdb" "www/Advanced_Clash_Content.asp" "www/Clash_action.asp"; do
+        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "www2/ui/index.html" "usr/share/clash/Country.mmdb" "www/Advanced_Clash_Content.asp" "www/Clash_action.asp" "usr/bin/clnc" "usr/bin/clnc-ctl" "usr/bin/clnc-tproxy.sh" "www/Advanced_Clnc_Content.asp" "www2/clnc.html" "www2/cgi-bin/clnc"; do
           grep -q "$f" /tmp/rd_list.txt || { echo "MISSING: $f"; PASS=0; }
         done
         [ "$PASS" = "1" ] || { echo "=== PAYLOAD MISSING ==="; exit 1; }
         # 硬校验: 原生页面 + 菜单 + ej 钩子链路
-        rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/state.js" "www/Advanced_Clash_Content.asp" > /dev/null 2>&1
+        rm -rf /tmp/sqx && tools/mksquashfs_xz/unsquashfs -f -d /tmp/sqx images/ramdisk "www/state.js" "www/Advanced_Clash_Content.asp" "www/Advanced_Clnc_Content.asp" > /dev/null 2>&1
         grep -q 'Advanced_Clash_Content.asp' /tmp/sqx/www/state.js || { echo "=== MENU ITEM MISSING (state.js) ==="; exit 1; }
         grep -q 'menuL2_title.push("Clash")' /tmp/sqx/www/state.js || { echo "=== MENU LABEL MISSING ==="; exit 1; }
-        grep -q 'clash_status' /tmp/sqx/www/Advanced_Clash_Content.asp || { echo "=== NATIVE PAGE BROKEN ==="; exit 1; }
+        grep -q '9091/cgi-bin/clash' /tmp/sqx/www/Advanced_Clash_Content.asp || { echo "=== NATIVE PAGE BROKEN (后端地址) ==="; exit 1; }
+        grep -q "api('saveconfig'" /tmp/sqx/www/Advanced_Clash_Content.asp || { echo "=== NATIVE PAGE BROKEN (YAML 编辑) ==="; exit 1; }
+        grep -q "api('dlcore'" /tmp/sqx/www/Advanced_Clash_Content.asp || { echo "=== NATIVE PAGE BROKEN (mihomo 下载) ==="; exit 1; }
+        grep -q 'Access-Control-Allow-Origin' romfs/usr/bin/clash-ctl || { echo "=== CLASH-CTL 缺 CORS ==="; exit 1; }
+        grep -q 'panelboot' romfs/usr/bin/clash-ctl || { echo "=== CLASH-CTL 缺 panelboot ==="; exit 1; }
+        grep -q 'done) >/dev/null 2>&1 &' romfs/usr/bin/clash-ctl || { echo "=== 看门狗未脱离 CGI 管道(重启会卡死) ==="; exit 1; }
+        grep -q 'external-controller: 0.0.0.0:9090' romfs/usr/bin/clash-ctl || { echo "=== 控制端点未强制 0.0.0.0 ==="; exit 1; }
+        grep -q '/www2/ui/index.html' romfs/usr/bin/clash-ctl || { echo "=== 面板 romfs 回退缺失 ==="; exit 1; }
+        grep -q 'Access-Control-Allow-Origin' romfs/usr/bin/clash-web.sh || { echo "=== CLASH-WEB.SH 缺 CORS ==="; exit 1; }
+        # clnc 硬校验: 菜单项 + 页面后端地址 + 后端 CORS/panelboot
+        grep -q 'Advanced_Clnc_Content.asp' /tmp/sqx/www/state.js || { echo "=== CLNC MENU ITEM MISSING ==="; exit 1; }
+        grep -q 'menuL2_title.push("CLNC")' /tmp/sqx/www/state.js || { echo "=== CLNC MENU LABEL MISSING ==="; exit 1; }
+        grep -q '9092/cgi-bin/clnc' /tmp/sqx/www/Advanced_Clnc_Content.asp || { echo "=== CLNC PAGE BROKEN (后端地址) ==="; exit 1; }
+        grep -q 'Access-Control-Allow-Origin' romfs/usr/bin/clnc-ctl || { echo "=== CLNC-CTL 缺 CORS ==="; exit 1; }
+        grep -q 'panelboot' romfs/usr/bin/clnc-ctl || { echo "=== CLNC-CTL 缺 panelboot ==="; exit 1; }
         grep -q 'ClashConf' /tmp/sqx/www/state.js || true
         echo "=== NATIVE PAGE + MENU VERIFIED ==="
         # httpd 二进制必须含 clash ej 钩子(证明 C 补丁编进去了) — 硬失败, 不允许 WARN

@@ -1,0 +1,5 @@
+#!/bin/sh
+# clnc 面板 CGI 包装 (romfs 兜底版, 指 /usr/bin/clnc-ctl)
+# 运行时面板(/etc/storage/clnc-web)由 clnc-ctl 的 panelboot 自建同名包装, 这里只作 romfs 兜底
+printf "Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+exec /usr/bin/clnc-ctl
