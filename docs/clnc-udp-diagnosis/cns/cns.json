@@ -1,0 +1,12 @@
+{
+    "Tcp_timeout": 600,
+    "Udp_timeout": 30,
+    "listen_addr": [":443"],
+    "proxy_key": "Meng",
+    "udp_flag": "httpUDP",
+    "encrypt_password": "<CNS_PWD>",
+    "Enable_dns_tcpOverUdp": true,
+    "Enable_httpDNS": true,
+    "Enable_TFO": false,
+    "pid_path": "/opt/cns/cns.pid"
+}
