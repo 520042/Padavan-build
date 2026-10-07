@@ -15,9 +15,13 @@
 
 | 路径 | 内容 |
 |---|---|
-| `REPORT.md` | 完整诊断报告（问题 / 证据 / 排除 / 根因 / 处置 / 方案） |
+| [`PROJECT-LOG.md`](./PROJECT-LOG.md) | **项目总记录（按主题整理）**：clnc UDP 根因 / 上行与 CPE 约束 / udp2raw / CNS / 运维备忘 / 时间线 |
+| [`REPORT.md`](./REPORT.md) | clnc UDP 崩溃的完整诊断报告（问题 / 证据 / 排除 / 根因 / 处置 / 方案） |
 | `confs/` | 测试用 clnc 配置（含官方模板写法、对照无 httpUDP 写法等） |
 | `scripts/` | 诊断与测试脚本（Python 端驱动 + R3G 侧运行脚本） |
+| [`cns/`](./cns/) | VPS 上 CNS 服务端的部署脚本与配置（端口 443，密码 <CNS_PWD>） |
+
+> 另外：项目还包含**上游链路约束**（该 CPE 在 WAP 模式下不给 R3G 通用公网出口 → udp2raw 不通）与**「开 clnc 后没网」事故**（CPE 的 USB 网卡变 `ZTE Trap` 模式）的分析，均整理在 `PROJECT-LOG.md`。
 
 ## `confs/` 说明
 
