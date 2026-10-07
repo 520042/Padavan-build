@@ -1,0 +1,396 @@
+#!/bin/sh
+# Clash 控制 CGI v4 — 功能完整版
+# 固件内置 mihomo(/usr/bin/mihomo) + 订阅管理 + 节点测速 + 模式切换 + 全手动
+# busybox httpd 1.24 CGI: 必须显式输出 Content-Type
+D=/etc/storage/clash
+CFG=$D/config.yaml
+SUB_URL=$D/sub.url
+SUB_YAML=$D/sub.yaml
+LOG=$D/clash.log
+MIHOMO_BUILTIN=/usr/bin/mihomo
+MIHOMO_DL=$D/mihomo
+CLASH_BUILTIN=/usr/bin/clash
+API=http://127.0.0.1:9090
+mkdir -p "$D"
+
+# 国内镜像链(全部 GitHub 资产下载): 逐镜像尝试, 全失败才直连
+MIRRORS="https://gh-proxy.com/ https://ghproxy.net/ https://ghfast.top/ https://gh.llkk.cc/ "
+CORE_URL="https://github.com/520042/Padavan-build/releases/download/v1.0.0/mihomo-upx-1.19.31"
+MD5_CORE="16ec1b99e3157a164dbd74339eef2b87"
+
+ACTION=$(printf '%s' "$QUERY_STRING" | sed -n 's/.*action=\([^&]*\).*/\1/p')
+printf 'Content-Type: text/plain; charset=utf-8\r\n\r\n'
+
+DEFAULT_CFG='port: 7890
+socks-port: 7893
+redir-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: 0.0.0.0:9090
+external-ui: /www2/ui
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  nameserver:
+    - 223.5.5.5
+rules:
+  - GEOIP,CN,DIRECT
+  - MATCH,PROXY'
+
+# ---------------- 工具 ----------------
+
+# 镜像链下载: 逐镜像 -> 直连兜底
+dl_mirror() {
+    for m in $MIRRORS; do
+        wget -q -T 15 -O "$2" "${m}${1}" && [ -s "$2" ] && return 0
+        rm -f "$2"
+    done
+    wget -q -T 15 -O "$2" "$1" && [ -s "$2" ] && return 0
+    rm -f "$2"
+    return 1
+}
+
+# 订阅下载: 直连 -> 本地代理 -> 国内镜像转发
+dl_sub() {
+    wget -q -T 15 -O "$2" "$1" && [ -s "$2" ] && return 0
+    if pidof mihomo >/dev/null 2>&1 || pidof clash >/dev/null 2>&1; then
+        http_proxy=http://127.0.0.1:7891 https_proxy=http://127.0.0.1:7891 \
+            wget -q -T 15 -O "$2" "$1" && [ -s "$2" ] && return 0
+    fi
+    for m in $MIRRORS; do
+        wget -q -T 15 -O "$2" "${m}${1}" && [ -s "$2" ] && return 0
+    done
+    rm -f "$2"
+    return 1
+}
+
+b64d() {
+    _s=$(printf '%s' "$1" | tr '_-' '/+')
+    _p=$(( (4 - ${#_s} % 4) % 4 ))
+    [ "$_p" -ne 0 ] && _s="$_s$(printf '%*s' "$_p" | tr ' ' '=')"
+    printf '%s' "$_s" | base64 -d 2>/dev/null
+}
+udecode() { printf '%b' "$(printf '%s' "$1" | tr '+' ' ' | sed 's/%/\\x/g')"; }
+ymark() { printf '%s' "$1" | tr -d '"\\' | tr -d '\r'; }
+
+# 核心选择: 用户更新版 > 固件内置 mihomo > 内置经典 clash
+pick_core() {
+    if [ -x "$MIHOMO_DL" ]; then echo "$MIHOMO_DL"
+    elif [ -x "$MIHOMO_BUILTIN" ]; then echo "$MIHOMO_BUILTIN"
+    elif [ -x "$CLASH_BUILTIN" ]; then echo "$CLASH_BUILTIN"
+    else echo ""
+    fi
+}
+
+# ---- 订阅节点转换 ----
+conv_ss() {
+    _b="${1#ss://}"
+    _name=$(printf '%s' "$_b" | sed -n 's/.*#//p'); _b="${_b%%#*}"; _b="${_b%%\?*}"
+    case "$_b" in
+    *@*) _cred="${_b%%@*}"; _rest="${_b#*@}"
+        _dec=$(b64d "$_cred") || return 1
+        case "$_dec" in *:*) ;; *) return 1 ;; esac
+        _method="${_dec%%:*}"; _pass="${_dec#*:}" ;;
+    *)  _dec=$(b64d "$_b") || return 1
+        case "$_dec" in *@*) ;; *) return 1 ;; esac
+        _cred="${_dec%%@*}"; _rest="${_dec#*@}"
+        case "$_cred" in *:*) ;; *) return 1 ;; esac
+        _method="${_cred%%:*}"; _pass="${_cred#*:}" ;;
+    esac
+    case "$_rest" in *:*) ;; *) return 1 ;; esac
+    _host="${_rest%%:*}"; _port="${_rest##*:}"
+    case "$_port" in ''|*[!0-9]*) return 1 ;; esac
+    [ -n "$_host" ] || return 1
+    _name=$(ymark "${_name:-$_host}")
+    printf -- '- {name: "%s", type: ss, server: %s, port: %s, cipher: %s, password: "%s", udp: true}\n' \
+        "$_name" "$(ymark "$_host")" "$_port" "$_method" "$(ymark "$_pass")"
+}
+conv_vmess() {
+    _j=$(b64d "${1#vmess://}") || return 1
+    _get() { printf '%s' "$_j" | sed -n "s/.*\"$1\"[: ]*\"\{0,1\}\([^,\"}\]*\)\"\{0,1\}.*/\1/p" | head -1; }
+    _ps=$(_get ps); _add=$(_get add); _port=$(_get port); _id=$(_get id)
+    _aid=$(_get aid); _net=$(_get net); _tls=$(_get tls); _path=$(_get path)
+    case "$_port" in ''|*[!0-9]*) return 1 ;; esac
+    [ -n "$_add" ] && [ -n "$_id" ] || return 1
+    _ps=$(ymark "${_ps:-$_add}")
+    _line="- {name: \"$_ps\", type: vmess, server: $(ymark "$_add"), port: $_port, uuid: $(ymark "$_id"), alterId: ${_aid:-0}, cipher: auto, udp: true"
+    [ "$_net" = "ws" ] && _line="$_line, network: ws, ws-opts: {path: \"$(udecode "${_path:-/}")\"}"
+    [ "$_tls" = "tls" ] && _line="$_line, tls: true"
+    printf '%s}\n' "$_line"
+}
+conv_trojan() {
+    _u="${1#trojan://}"; _name=$(printf '%s' "$_u" | sed -n 's/.*#//p')
+    _b="${_u%%#*}"; _q="${_b#*\?}"; _b="${_b%%\?*}"
+    case "$_b" in *@*) ;; *) return 1 ;; esac
+    _pass="${_b%%@*}"; _rest="${_b#*@}"
+    case "$_rest" in *:*) ;; *) return 1 ;; esac
+    _host="${_rest%%:*}"; _port="${_rest##*:}"
+    case "$_port" in ''|*[!0-9]*) return 1 ;; esac
+    _sni=$(printf '%s' "$_q" | sed -n 's/.*[?&]sni=\([^&]*\).*/\1/p')
+    [ -n "$_sni" ] && _sni=$(udecode "$_sni")
+    _name=$(ymark "${_name:-$_host}")
+    _line="- {name: \"$_name\", type: trojan, server: $(ymark "$_host"), port: $_port, password: \"$(ymark "$_pass")\", udp: true"
+    [ -n "$_sni" ] && _line="$_line, sni: \"$_sni\""
+    printf '%s}\n' "$_line"
+}
+conv_vless() {
+    _u="${1#vless://}"; _name=$(printf '%s' "$_u" | sed -n 's/.*#//p')
+    _b="${_u%%#*}"; _q="${_b#*\?}"; _b="${_b%%\?*}"
+    case "$_b" in *@*) ;; *) return 1 ;; esac
+    _uuid="${_b%%@*}"; _rest="${_b#*@}"
+    case "$_rest" in *:*) ;; *) return 1 ;; esac
+    _host="${_rest%%:*}"; _port="${_rest##*:}"
+    case "$_port" in ''|*[!0-9]*) return 1 ;; esac
+    _sec=$(printf '%s' "$_q" | sed -n 's/.*[?&]security=\([^&]*\).*/\1/p')
+    _sni=$(printf '%s' "$_q" | sed -n 's/.*[?&]sni=\([^&]*\).*/\1/p')
+    _net=$(printf '%s' "$_q" | sed -n 's/.*[?&]type=\([^&]*\).*/\1/p')
+    _path=$(printf '%s' "$_q" | sed -n 's/.*[?&]path=\([^&]*\).*/\1/p')
+    [ -n "$_sni" ] && _sni=$(udecode "$_sni")
+    [ -n "$_path" ] && _path=$(udecode "$_path")
+    _name=$(ymark "${_name:-$_host}")
+    _line="- {name: \"$_name\", type: vless, server: $(ymark "$_host"), port: $_port, uuid: $(ymark "$_uuid"), udp: true"
+    [ "$_sec" = "tls" ] && _line="$_line, tls: true"
+    [ -n "$_sni" ] && _line="$_line, servername: \"$_sni\""
+    [ "$_net" = "ws" ] && _line="$_line, network: ws, ws-opts: {path: \"${_path:-/}\"}"
+    printf '%s}\n' "$_line"
+}
+sub_to_yaml() {
+    _src="$1"; _out="$2"
+    : > "$_out"
+    if grep -q '^proxies:' "$_src" 2>/dev/null; then cp -f "$_src" "$_out"; return 0; fi
+    _dec=$(b64d "$(tr -d ' \r\n\t' < "$_src")") || _dec=""
+    [ -n "$_dec" ] || _dec=$(cat "$_src")
+    printf '%s\n' "$_dec" | while IFS= read -r _line; do
+        case "$_line" in
+        ss://*) conv_ss "$_line" ;;
+        vmess://*) conv_vmess "$_line" ;;
+        trojan://*) conv_trojan "$_line" ;;
+        vless://*) conv_vless "$_line" ;;
+        esac
+    done > "$_out"
+    [ -s "$_out" ]
+}
+build_cfg_from_sub() {
+    _p="$1"
+    _names=$(sed -n 's/^- {name: "\([^"]*\)".*/\1/p' "$_p" | sed 's/^/      - "/;s/$/"/')
+    cat > "$CFG" <<EOF
+port: 7890
+socks-port: 7893
+redir-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: 0.0.0.0:9090
+external-ui: /www2/ui
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  nameserver:
+    - 223.5.5.5
+proxies:
+$(cat "$_p")
+proxy-groups:
+  - name: "PROXY"
+    type: select
+    proxies:
+      - AUTO
+      - DIRECT
+$_names
+  - name: AUTO
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    proxies:
+$_names
+rules:
+  - GEOIP,CN,DIRECT
+  - MATCH,PROXY
+EOF
+}
+
+# ---------------- 动作 ----------------
+case "$ACTION" in
+status)
+    RUN=0
+    pidof mihomo >/dev/null 2>&1 && RUN=1
+    pidof clash >/dev/null 2>&1 && RUN=1
+    BIN=$(pick_core)
+    CORE="未运行"
+    [ "$RUN" = "1" ] && CORE="运行中"
+    [ -n "$BIN" ] && CORE="$CORE ($(basename "$BIN"))"
+    VER="?"; [ -n "$BIN" ] && VER=$("$BIN" -v 2>/dev/null | head -1)
+    MODE=$(grep -m1 '^mode:' "$CFG" 2>/dev/null | sed 's/mode: *//')
+    [ -z "$MODE" ] && MODE="未配置"
+    MI="固件内置"; [ -x "$MIHOMO_DL" ] && MI="已更新(优先使用)"
+    SUB="未设置"; [ -s "$SUB_URL" ] && SUB="已设置"
+    SUBY="未导入"; [ -s "$SUB_YAML" ] && SUBY="已导入"
+    UI="已内置(yacd)"
+    printf '{"ok":true,"run":%d,"core":"%s","ver":"%s","mode":"%s","ui":"%s","mihomo":"%s","sub":"%s","subyaml":"%s"}' \
+        "$RUN" "$CORE" "$VER" "$MODE" "$UI" "$MI" "$SUB" "$SUBY"
+    ;;
+start)
+    BIN=$(pick_core)
+    [ -n "$BIN" ] || { echo "错误: 固件内未找到核心"; exit 0; }
+    [ -f "$CFG" ] || printf '%s\n' "$DEFAULT_CFG" > "$CFG"
+    killall clash mihomo 2>/dev/null; sleep 1
+    cd "$D" || exit 0
+    nohup "$BIN" -d "$D" -f "$CFG" > "$LOG" 2>&1 </dev/null &
+    sleep 2
+    BN=$(basename "$BIN")
+    if pidof "$BN" >/dev/null 2>&1 || pidof clash >/dev/null 2>&1 || pidof mihomo >/dev/null 2>&1; then
+        iptables -t nat -N CLASH 2>/dev/null; iptables -t nat -F CLASH 2>/dev/null
+        for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+            iptables -t nat -A CLASH -d "$net" -j RETURN 2>/dev/null
+        done
+        iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891 2>/dev/null
+        iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+        iptables -t nat -A PREROUTING -j CLASH 2>/dev/null
+        (while sleep 15; do
+            pidof clash >/dev/null 2>&1 || pidof mihomo >/dev/null 2>&1 || {
+                iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+                iptables -t nat -F CLASH 2>/dev/null; iptables -t nat -X CLASH 2>/dev/null
+                break
+            }
+        done) >/dev/null 2>&1 </dev/null &
+        echo "启动成功 ($BN), 节点面板 http://路由器IP:9090/ui/"
+    else
+        echo "启动失败, 日志尾部: $(tail -3 "$LOG" 2>/dev/null)"
+    fi
+    ;;
+stop)
+    killall clash mihomo 2>/dev/null; sleep 1
+    iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+    iptables -t nat -F CLASH 2>/dev/null; iptables -t nat -X CLASH 2>/dev/null
+    echo "已停止并摘除劫持规则"
+    ;;
+restart)
+    killall clash mihomo 2>/dev/null; sleep 1
+    iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+    iptables -t nat -F CLASH 2>/dev/null; iptables -t nat -X CLASH 2>/dev/null
+    sleep 1
+    BIN=$(pick_core)
+    [ -n "$BIN" ] || { echo "无可用核心"; exit 0; }
+    cd "$D" || exit 0
+    nohup "$BIN" -d "$D" -f "$CFG" > "$LOG" 2>&1 </dev/null &
+    sleep 2
+    iptables -t nat -N CLASH 2>/dev/null; iptables -t nat -F CLASH 2>/dev/null
+    for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+        iptables -t nat -A CLASH -d "$net" -j RETURN 2>/dev/null
+    done
+    iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports 7891 2>/dev/null
+    iptables -t nat -A PREROUTING -j CLASH 2>/dev/null
+    echo "已重启 ($(basename "$BIN"))"
+    ;;
+safety)
+    killall clash mihomo 2>/dev/null
+    iptables -t nat -D PREROUTING -j CLASH 2>/dev/null
+    iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null
+    iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 1053 2>/dev/null
+    iptables -t nat -F CLASH 2>/dev/null; iptables -t nat -X CLASH 2>/dev/null
+    echo "已强制摘除全部劫持规则, 网络恢复"
+    ;;
+mode)
+    M=$(printf '%s' "$QUERY_STRING" | sed -n 's/.*mode=\([^&]*\).*/\1/p')
+    [ -f "$CFG" ] || printf '%s\n' "$DEFAULT_CFG" > "$CFG"
+    case "$M" in rule|global|direct)
+        grep -q '^mode:' "$CFG" && sed -i "s/^mode:.*/mode: $M/" "$CFG" || sed -i "1i mode: $M" "$CFG"
+        killall clash mihomo 2>/dev/null; sleep 1
+        BIN=$(pick_core)
+        [ -n "$BIN" ] && { cd "$D"; nohup "$BIN" -d "$D" -f "$CFG" > "$LOG" 2>&1 </dev/null & }
+        sleep 2
+        echo "模式已切换为 $M 并重启生效"
+        ;;
+    *) echo "模式参数错误(应为 rule/global/direct)" ;;
+    esac
+    ;;
+ver)
+    [ -x "$MIHOMO_BUILTIN" ] && { echo "固件内置 mihomo: $("$MIHOMO_BUILTIN" -v 2>/dev/null | head -1)"; }
+    [ -x "$MIHOMO_DL" ] && { echo "手动更新版: $("$MIHOMO_DL" -v 2>/dev/null | head -1) (优先使用)"; }
+    [ -x "$CLASH_BUILTIN" ] && { echo "内置经典 clash: $("$CLASH_BUILTIN" -v 2>/dev/null | head -1)"; }
+    ;;
+dlcore)
+    echo "开始下载 mihomo 更新(国内镜像优先, 约 12.8MB)..."
+    if dl_mirror "$CORE_URL" "$D/mihomo.dl"; then
+        SZKB=$(( $(stat -c%s "$D/mihomo.dl") / 1024 + 300 ))
+        AVAIL=$(df -k /etc/storage 2>/dev/null | awk 'NR==2{print $4}')
+        if [ -n "$AVAIL" ] && [ "$AVAIL" -gt 0 ] && [ "$SZKB" -gt "$AVAIL" ]; then
+            rm -f "$D/mihomo.dl"
+            echo "空间不足: /etc/storage 可用 ${AVAIL}KB, 需要 ${SZKB}KB"
+            echo "固件内置 mihomo 已支持 VLESS/Reality/Hysteria2, 可不更新"
+        else
+        GOT=$(md5sum "$D/mihomo.dl" | awk '{print $1}')
+        mv -f "$D/mihomo.dl" "$MIHOMO_DL"
+        chmod +x "$MIHOMO_DL"
+        [ "$GOT" = "$MD5_CORE" ] && echo "核心更新完成(校验通过): $("$MIHOMO_DL" -v 2>/dev/null | head -1)" \
+            || echo "核心已更新(校验值不同, 仍可使用): $("$MIHOMO_DL" -v 2>/dev/null | head -1)"
+        echo "存于 /etc/storage(重启保留), 启动时优先于固件内置核心"
+        fi
+    else
+        rm -f "$D/mihomo.dl"
+        echo "镜像下载失败; 固件内置 mihomo 依然可用"
+    fi
+    ;;
+delcore)
+    rm -f "$MIHOMO_DL"
+    echo "已删除手动更新版, 恢复使用固件内置 mihomo"
+    ;;
+setsub)
+    CL=$(printf '%s' "$CONTENT_LENGTH" | tr -d '\r\n ')
+    if [ -n "$CL" ] && [ "$CL" -gt 0 ] 2>/dev/null; then
+        _url=$(dd bs=1 count="$CL" 2>/dev/null | tr -d '\r\n')
+        case "$_url" in
+        http://*|https://*) printf '%s\n' "$_url" > "$SUB_URL"; echo "订阅链接已保存, 点「下载并导入」拉取节点" ;;
+        *) echo "订阅链接格式不对(需 http:// 或 https:// 开头)" ;;
+        esac
+    else echo "未收到订阅链接"; fi
+    ;;
+getsub) cat "$SUB_URL" 2>/dev/null || echo "" ;;
+dlsub)
+    [ -s "$SUB_URL" ] || { echo "请先粘贴并保存订阅链接"; exit 0; }
+    echo "下载订阅中(直连 -> 本地代理 -> 国内镜像)..."
+    if dl_sub "$(cat "$SUB_URL")" "$D/sub.raw"; then
+        if sub_to_yaml "$D/sub.raw" "$SUB_YAML"; then
+            N=$(grep -c '^- {' "$SUB_YAML" 2>/dev/null)
+            grep -q '^proxies:' "$SUB_YAML" && N=$(grep -c '^  - ' "$SUB_YAML")
+            build_cfg_from_sub "$SUB_YAML"; rm -f "$D/sub.raw"
+            echo "订阅导入成功: $N 个节点, 已生成配置(国内直连+PROXY分组)"
+        else
+            rm -f "$D/sub.raw"
+            echo "订阅格式无法识别, 可手动粘贴 YAML 到配置框"
+        fi
+    else echo "订阅下载失败, 请检查链接或稍后重试"; fi
+    ;;
+getsubyaml) [ -s "$SUB_YAML" ] && head -120 "$SUB_YAML" || echo "(订阅未导入)" ;;
+delsub) rm -f "$SUB_URL" "$SUB_YAML" "$D/sub.raw"; echo "已删除订阅" ;;
+nodes)
+    if ! pidof mihomo >/dev/null 2>&1 && ! pidof clash >/dev/null 2>&1; then
+        echo "(核心未运行, 请先启动)"
+        exit 0
+    fi
+    wget -q -T 6 -O "$D/api.json" "$API/proxies" 2>/dev/null || { echo "(API 未响应, 确认核心已启动)"; exit 0; }
+    tr ',' '\n' < "$D/api.json" | grep -E '"(name|type)":' | sed 's/.*"name":"\([^"]*\)".*/节点: \1/;s/.*"type":"\([^"]*\)".*/  类型: \1/' | head -80
+    ;;
+speedtest)
+    if ! pidof mihomo >/dev/null 2>&1 && ! pidof clash >/dev/null 2>&1; then
+        echo "(核心未运行)"
+        exit 0
+    fi
+    wget -q -T 45 -O "$D/delay.json" "$API/group/PROXY/delay?url=http://www.gstatic.com/generate_204&timeout=5000" 2>/dev/null || { echo "(测速失败, 核心可能未运行)"; exit 0; }
+    tr '}' '\n' < "$D/delay.json" | sed 's/.*"name":"\([^"]*\)".*"delay":\([0-9]*\).*/\1 : \2 ms/;s/.*"name":"\([^"]*\)".*/\1 : 超时/' | grep 'ms\|超时' | head -40
+    ;;
+log) tail -80 "$LOG" 2>/dev/null || echo "(日志为空)" ;;
+clearlog) : > "$LOG"; echo "日志已清空" ;;
+getcfg) cat "$CFG" 2>/dev/null || echo "(无配置, 点启动会生成默认)" ;;
+saveconfig)
+    CL=$(printf '%s' "$CONTENT_LENGTH" | tr -d '\r\n ')
+    if [ -n "$CL" ] && [ "$CL" -gt 0 ] 2>/dev/null; then
+        mkdir -p "$D"; dd of="$CFG" bs=1 count="$CL" 2>/dev/null
+        echo "配置已保存, 点「↻ 重启」生效"
+    else echo "未收到内容"; fi
+    ;;
+backup)
+    cp -f "$CFG" "$D/config-$(date +%m%d-%H%M).yaml" 2>/dev/null && echo "已备份: config-$(date +%m%d-%H%M).yaml" || echo "备份失败(无配置?)"
+    ;;
+*) echo "unknown action" ;;
+esac

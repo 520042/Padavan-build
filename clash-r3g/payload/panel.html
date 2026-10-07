@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clash 控制面板</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#f0f2f5;margin:0;padding:14px;font-size:14px}
+h2{color:#1a73e8;margin:0 0 12px;font-size:18px}
+.card{background:#fff;border-radius:10px;padding:14px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.card b.t{display:block;font-size:15px;margin-bottom:8px;color:#202124}
+button{border:0;border-radius:6px;padding:9px 13px;margin:3px 3px 3px 0;color:#fff;cursor:pointer;font-size:13px}
+.b-start{background:#1a73e8}.b-stop{background:#d93025}.b-dl{background:#188038}
+.b-safe{background:#5f6368}.b-warn{background:#e37400}.b-info{background:#0b8043}
+#status{font-size:13px;line-height:1.9}
+pre{background:#202124;color:#aee;padding:10px;border-radius:6px;font-size:12px;max-height:220px;overflow:auto;white-space:pre-wrap;margin:8px 0}
+textarea{width:100%;height:180px;font-family:monospace;font-size:12px;box-sizing:border-box}
+input[type=text]{width:100%;box-sizing:border-box;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px}
+.msg{color:#d93025;font-size:13px;min-height:18px;margin-top:6px}
+.tip{font-size:12px;color:#666;margin-top:6px;line-height:1.6}
+a{color:#1a73e8}
+.row{margin-top:8px}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;color:#fff;background:#5f6368}
+.tag.on{background:#188038}.tag.off{background:#d93025}
+</style>
+</head>
+<body>
+<h2>Clash 控制面板</h2>
+
+<div class="card">
+  <b class="t">运行状态与控制（全手动，无自启）</b>
+  <div id="status">加载中...</div>
+  <div class="msg" id="msg"></div>
+  <div class="row">
+    <button class="b-start" onclick="act('start')">▶ 启动</button>
+    <button class="b-stop" onclick="act('stop')">■ 停止</button>
+    <button class="b-warn" onclick="act('restart')">↻ 重启</button>
+    <button class="b-safe" onclick="act('safety')">🛡 解除断网</button>
+  </div>
+  <div class="row">
+    <b>模式：</b>
+    <button class="b-info" onclick="act('mode&mode=rule')">规则(国内直连)</button>
+    <button class="b-info" onclick="act('mode&mode=global')">全局代理</button>
+    <button class="b-info" onclick="act('mode&mode=direct')">直连(关闭代理)</button>
+  </div>
+  <div class="tip">核心异常退出时，看门狗 15 秒内自动摘除规则保底不断网。</div>
+</div>
+
+<div class="card">
+  <b class="t">订阅管理（粘贴链接 → 一键导入节点）</b>
+  <input type="text" id="suburl" placeholder="机场订阅链接 https://...">
+  <div class="row">
+    <button class="b-safe" onclick="saveSub()">💾 保存链接</button>
+    <button class="b-dl" onclick="act('dlsub')">⬇ 下载并导入</button>
+    <button class="b-warn" onclick="viewSub()">👁 查看节点</button>
+    <button class="b-stop" onclick="act('delsub')">🗑 删除订阅</button>
+  </div>
+  <pre id="subyaml" style="display:none"></pre>
+  <div class="tip">订阅走「直连 → 本地代理 → 国内镜像」三级通道；支持 base64(ss/vmess/trojan/vless)与 YAML 两种格式，转换后自动建「国内直连 + PROXY 分组」。</div>
+</div>
+
+<div class="card">
+  <b class="t">节点与测速</b>
+  <div>
+    <button class="b-info" onclick="act('nodes')">📋 节点列表</button>
+    <button class="b-warn" onclick="act('speedtest')">⚡ 一键测速</button>
+    <button class="b-safe" onclick="openYacd()">🎛 yacd 面板(切节点)</button>
+  </div>
+  <pre id="nodesbox" style="display:none"></pre>
+  <div class="tip">测速走 clash API 整组延迟测试；切换节点请用 yacd 面板。</div>
+</div>
+
+<div class="card">
+  <b class="t">核心管理（固件已预装 mihomo）</b>
+  <div>
+    <button class="b-dl" onclick="act('dlcore')">⬇ 手动更新核心</button>
+    <button class="b-stop" onclick="act('delcore')">🗑 删除更新版</button>
+    <button class="b-safe" onclick="showVer()">ℹ 版本信息</button>
+  </div>
+  <pre id="verbox" style="display:none"></pre>
+  <div class="tip"><b>固件已内置 mihomo 全协议核心</b>（支持 VLESS/Reality/Hysteria2），刷完即用，无需下载。手动更新的核心存 /etc/storage 且优先使用；更新走国内镜像链。</div>
+</div>
+
+<div class="card">
+  <b class="t">运行日志</b>
+  <div>
+    <button class="b-safe" onclick="loadLog()">刷新日志</button>
+    <button class="b-stop" onclick="act('clearlog')">清空日志</button>
+  </div>
+  <pre id="log">点击「刷新日志」加载</pre>
+</div>
+
+<div class="card">
+  <b class="t">配置管理</b>
+  <textarea id="cfg" spellcheck="false"></textarea>
+  <div class="row">
+    <button class="b-start" onclick="saveCfg()">💾 保存配置</button>
+    <button class="b-safe" onclick="loadCfg()">↺ 载入当前</button>
+    <button class="b-info" onclick="act('backup')">📦 备份配置</button>
+  </div>
+  <div class="tip">保存后点「↻ 重启」生效；备份会存为 config-日期.yaml。</div>
+</div>
+
+<script>
+function show(m){document.getElementById('msg').textContent=m;}
+function openYacd(){window.open('http://'+location.hostname+':9091/ui/','_blank');}
+async function refresh(){
+  try{
+    const r=await fetch('cgi-bin/clash?action=status');const j=await r.json();
+    document.getElementById('status').innerHTML=
+      '运行: <span class="tag '+(j.run?'on':'off')+'">'+(j.run?'🟢 运行中':'🔴 已停止')+'</span>　'
+      +'核心: '+j.core+'　模式: '+(j.mode||'?')
+      +'<br>版本: '+(j.ver||'?')+'　mihomo: '+j.mihomo
+      +'<br>订阅: '+j.sub+' / '+j.subyaml+'　面板: '+j.ui;
+  }catch(e){document.getElementById('status').textContent='无法连接 CGI';}
+}
+async function act(a){
+  if(a.indexOf('dlcore')===0||a.indexOf('dlsub')===0)show('执行中，下载约 10-60 秒，请勿关闭...');
+  else if(a.indexOf('speedtest')===0)show('测速中，约 10-30 秒...');
+  else show('执行中...');
+  try{
+    const r=await fetch('cgi-bin/clash?action='+a);
+    const t=await r.text();
+    if(a.indexOf('nodes')===0||a.indexOf('speedtest')===0){showBox('nodesbox',t);}
+    show(t.trim().split('\n').slice(-2).join(' | ').slice(0,240));
+    refresh();
+  }catch(e){show('请求失败: '+e);}
+}
+function showBox(id,txt){
+  const b=document.getElementById(id);
+  b.textContent=txt.slice(0,4000);b.style.display='block';
+}
+async function saveSub(){
+  const u=document.getElementById('suburl').value.trim();
+  if(!u){show('请先粘贴订阅链接');return;}
+  show('保存中...');
+  const r=await fetch('cgi-bin/clash?action=setsub',{method:'POST',body:u});
+  show(await r.text());refresh();
+}
+async function viewSub(){
+  const b=document.getElementById('subyaml');
+  if(b.style.display==='none'){const r=await fetch('cgi-bin/clash?action=getsubyaml');b.textContent=(await r.text()).slice(0,3000);b.style.display='block';}
+  else b.style.display='none';
+}
+async function showVer(){
+  const b=document.getElementById('verbox');
+  if(b.style.display==='none'){const r=await fetch('cgi-bin/clash?action=ver');b.textContent=await r.text();b.style.display='block';}
+  else b.style.display='none';
+}
+async function loadLog(){
+  const r=await fetch('cgi-bin/clash?action=log');document.getElementById('log').textContent=await r.text();
+}
+async function loadCfg(){
+  const r=await fetch('cgi-bin/clash?action=getcfg');document.getElementById('cfg').value=await r.text();
+}
+async function saveCfg(){
+  const c=document.getElementById('cfg').value;
+  const r=await fetch('cgi-bin/clash?action=saveconfig',{method:'POST',body:c});
+  show(await r.text());
+}
+async function initSub(){
+  const r=await fetch('cgi-bin/clash?action=getsub');
+  const t=(await r.text()).trim();
+  if(t)document.getElementById('suburl').value=t;
+}
+refresh();setInterval(refresh,5000);loadCfg();initSub();
+</script>
+</body>
+</html>
