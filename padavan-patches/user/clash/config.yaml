@@ -1,0 +1,84 @@
+# ===== 出厂默认配置（wangka 免流结构版，对齐 clash-changelog.md）=====
+# 结构：WAP 网关节点 + 5 个 K 节点 + [全局]选节点组（组第一项=WAP，重启回落 WAP）
+# K1~K5 为占位参数（127.0.0.1 不会外连），刷机后请用 WebUI「Clash」页
+# YAML 编辑器导入真机热部署版真实参数，或填订阅链接后点「更新订阅」。
+mixed-port: 7890
+redir-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: 0.0.0.0:9090
+external-ui: /tmp/clash-run/ui
+secret: ""
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - +.lan
+    - +.local
+    - +.msftconnecttest.com
+    - +.msftncsi.com
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+proxies:
+  - name: "K广州"
+    type: http
+    server: 14.215.182.75
+    port: 443
+    headers:
+      X-T5-Auth: "683556433"
+      Host: 153.3.236.22:443
+      dialer-proxy: "WAP"
+  - name: "K江苏南京"
+    type: http
+    server: 180.101.50.249
+    port: 443
+    headers:
+      X-T5-Auth: "683556433"
+      Host: 153.3.236.22:443
+      dialer-proxy: "WAP"
+  - name: "K江苏苏州"
+    type: http
+    server: 180.101.50.208
+    port: 443
+    headers:
+      X-T5-Auth: "683556433"
+      Host: 153.3.236.22:443
+      dialer-proxy: "WAP"
+  - name: "K北京"
+    type: http
+    server: 220.181.111.189
+    port: 443
+    headers:
+      X-T5-Auth: "683556433"
+      Host: 153.3.236.22:443
+      dialer-proxy: "WAP"
+  - name: "K北京1"
+    type: http
+    server: 220.181.7.1
+    port: 443
+    headers:
+      X-T5-Auth: "683556433"
+      Host: 153.3.236.22:443
+      dialer-proxy: "WAP"
+  - name: "WAP"
+    type: http
+    server: 10.0.0.200
+    port: 80
+proxy-groups:
+  - name: "[全局]选节点"
+    type: select
+    proxies:
+      - WAP
+      - DIRECT
+      - K广州
+      - K江苏南京
+      - K江苏苏州
+      - K北京
+      - K北京1
+rules:
+  - DOMAIN-KEYWORD,ingest.sentry,REJECT
+  - MATCH,[全局]选节点
