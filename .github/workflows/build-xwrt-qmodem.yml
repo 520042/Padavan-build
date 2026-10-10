@@ -1,0 +1,82 @@
+# XWrt R3G + QModem 整编（GitHub Actions 云端无人值守）
+# 触发：手动 Run workflow，或 push 到 xwrt-qmodem 分支
+# 产物：Artifacts 里下载 bin/targets/ramips/mt7621/*
+name: Build XWrt R3G + QModem
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ xwrt-qmodem ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libncurses5-dev libncursesw5-dev zlib1g-dev \
+            gawk git gettext libssl-dev xsltproc wget unzip python3 \
+            python3-distutils file rsync ccache
+
+      - name: 加速 GitHub 访问（国内镜像）
+        run: |
+          git config --global url."https://ghfast.top/https://github.com/".insteadOf https://github.com/
+          git config --global url."https://mirror.ghproxy.com/https://github.com/".insteadOf https://github.com/ || true
+
+      - name: 克隆 XWrt 源码（master / 内核 6.18）
+        run: |
+          git clone --depth 1 https://github.com/x-wrt/x-wrt x-wrt
+          cd x-wrt && git log --oneline -1
+
+      - name: 加入 QModem feed 并选包
+        working-directory: x-wrt
+        run: |
+          # QModem 源码克隆到独立目录，避免污染 package/feeds
+          git clone --depth 1 https://github.com/FUjr/QModem qmodem-src
+          # 准备 feeds.conf
+          [ -f feeds.conf ] || cp feeds.conf.default feeds.conf
+          grep -q "src-link qmodem" feeds.conf || \
+            echo "src-link qmodem $(pwd)/qmodem-src" >> feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -p qmodem
+          # 选中目标 + QModem（主线驱动，无厂商 out-of-tree 模块）
+          make defconfig
+          cat >> .config <<'EOF'
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt7621=y
+          CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3g=y
+          CONFIG_PACKAGE_qmodem=y
+          CONFIG_PACKAGE_luci-app-qmodem-next=y
+          CONFIG_PACKAGE_qmodem_INCLUDE_generic-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
+          CONFIG_PACKAGE_kmod-usb2=y
+          CONFIG_PACKAGE_luci-i18n-qmodem-next-zh-cn=y
+          EOF
+          make defconfig
+
+      - name: 下载源码（前置，失败可快速暴露）
+        working-directory: x-wrt
+        run: make -j$(nproc) download
+
+      - name: 编译（root 下强制 configure）
+        working-directory: x-wrt
+        env:
+          FORCE_UNSAFE_CONFIGURE: 1
+        run: |
+          make -j$(nproc) || make -j1 V=s
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xwrt-r3g-qmodem
+          path: x-wrt/bin/targets/ramips/mt7621/*
+          if-no-files-found: warn
