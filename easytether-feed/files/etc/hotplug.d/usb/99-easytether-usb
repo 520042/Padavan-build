@@ -1,0 +1,7 @@
+#!/bin/sh
+
+[ "$ACTION" = "add" ] || exit 0
+
+[ "$INTERFACE" = "255/66/1" ] && {
+	/usr/bin/easytether-usb -n "/sys$DEVPATH"
+}
