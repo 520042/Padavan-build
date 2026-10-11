@@ -1,8 +1,8 @@
-# 精简版 R3G 固件：OpenWrt 24.10 稳定版 + QModem 管理（最小占用）
-# 底座用 OpenWrt（非 XWrt），仅编入：基础系统 + 最小 LuCI + QModem + 必需 USB 驱动
+# 精简版 R3G 固件：OpenWrt 24.10 稳定版 + QModem 管理 + EasyTether 驱动（最小占用）
+# 底座用 OpenWrt（非 XWrt），仅编入：基础系统 + 最小 LuCI + QModem + EasyTether + 必需 USB 驱动
 # 触发：手动 Run workflow，或 push 到 openwrt-qmodem-slim 分支
 # 产物：Artifacts 下载 openwrt-r3g-slim（含 sysupgrade.bin / factory.bin）
-name: Build OpenWrt R3G Slim + QModem
+name: Build OpenWrt R3G Slim + QModem + EasyTether
 
 on:
   workflow_dispatch:
@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     steps:
+      - name: 检出仓库（含 easytether-feed）
+        uses: actions/checkout@v4
+
       - name: 安装编译依赖
         run: |
           sudo apt-get update
@@ -31,17 +34,19 @@ jobs:
           git clone --depth 1 --branch openwrt-24.10 https://github.com/openwrt/openwrt openwrt
           cd openwrt && git log --oneline -1
 
-      - name: 加入 QModem feed 并选最小包集
+      - name: 加入 QModem + EasyTether feed 并选最小包集
         working-directory: openwrt
         run: |
           git clone --depth 1 https://github.com/FUjr/QModem qmodem-src
           cp feeds.conf.default feeds.conf
           grep -q "src-link qmodem" feeds.conf || \
             echo "src-link qmodem $(pwd)/qmodem-src" >> feeds.conf
+          grep -q "src-link easytether" feeds.conf || \
+            echo "src-link easytether ${{ github.workspace }}/easytether-feed" >> feeds.conf
           ./scripts/feeds update -a
-          ./scripts/feeds install -a -p qmodem
+          ./scripts/feeds install -a
           make defconfig
-          # 仅选中：设备 + 最小 LuCI + QModem + USB 驱动（不拉多余应用）
+          # 仅选中：设备 + 最小 LuCI + QModem + EasyTether + USB 驱动（不拉多余应用）
           cat >> .config <<'EOF'
           CONFIG_TARGET_ramips=y
           CONFIG_TARGET_ramips_mt7621=y
@@ -51,6 +56,9 @@ jobs:
           CONFIG_PACKAGE_qmodem=y
           CONFIG_PACKAGE_luci-app-qmodem-next=y
           CONFIG_PACKAGE_qmodem_INCLUDE_generic-qmi-wwan=y
+          CONFIG_PACKAGE_luci-i18n-qmodem-next-zh-cn=y
+          CONFIG_PACKAGE_easytether-usb-tiny=y
+          CONFIG_PACKAGE_kmod-tun=y
           CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
           CONFIG_PACKAGE_kmod-usb-serial-option=y
           CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
@@ -58,7 +66,6 @@ jobs:
           CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
           CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
           CONFIG_PACKAGE_kmod-usb2=y
-          CONFIG_PACKAGE_luci-i18n-qmodem-next-zh-cn=y
           EOF
           make defconfig
 
