@@ -68,6 +68,20 @@ jobs:
           CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
           CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
           CONFIG_PACKAGE_kmod-usb2=y
+          # === 射频驱动（R3G 双频）===
+          CONFIG_PACKAGE_kmod-mt7603=y
+          CONFIG_PACKAGE_kmod-mt7615e=y
+          CONFIG_PACKAGE_kmod-mt7615-firmware=y
+          # === AP 守护 + 无线工具 ===
+          CONFIG_PACKAGE_wpad-basic-mbedtls=y
+          CONFIG_PACKAGE_iwinfo=y
+          # === USB 猫用户态协议助手（补全 USB 共享）===
+          CONFIG_PACKAGE_umbim=y
+          CONFIG_PACKAGE_uqmi=y
+          CONFIG_PACKAGE_comgt=y
+          CONFIG_PACKAGE_ppp=y
+          # === iPhone USB 共享 ===
+          CONFIG_PACKAGE_kmod-usb-net-ipheth=y
           EOF
           make defconfig
 
@@ -86,7 +100,7 @@ jobs:
         run: |
           MANIFEST=$(ls openwrt/bin/targets/ramips/mt7621/*.manifest)
           echo "=== 校验 manifest: $MANIFEST ==="
-          for pkg in easytether-usb-tiny qmodem luci-app-qmodem-next kmod-tun kmod-usb-serial-option kmod-usb-net-cdc-mbim; do
+          for pkg in easytether-usb-tiny qmodem luci-app-qmodem-next kmod-tun kmod-usb-serial-option kmod-usb-net-cdc-mbim kmod-mt7603 kmod-mt7615e wpad-basic-mbedtls; do
             if grep -q "$pkg" "$MANIFEST"; then
               echo "  [OK] $pkg 已编入"
             else
