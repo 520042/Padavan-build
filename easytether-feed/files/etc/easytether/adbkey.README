@@ -1,0 +1,13 @@
+1) Create the unique adbkey file on your computer (not your router):
+$ openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:2048 -out adbkey
+
+Older OpenSSL versions (e.g. as found on macOS) lack the genpkey command
+so use the following shell pipeline:
+$ openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out adbkey
+
+2) Install the created file as /etc/easytether/adbkey on your router:
+$ scp adbkey root@192.168.1.1:/etc/easytether/adbkey
+
+3) Make sure the installed file has proper ownership and permissions:
+# chown root:root /etc/easytether/adbkey
+# chmod 0600 /etc/easytether/adbkey
