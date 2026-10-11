@@ -1,0 +1,91 @@
+# 精简版 R3G 固件：OpenWrt 24.10 稳定版 + QModem 管理 + EasyTether 驱动（最小占用）
+# 底座用 OpenWrt（非 XWrt），仅编入：基础系统 + 最小 LuCI + QModem + EasyTether + 必需 USB 驱动
+# 触发：手动 Run workflow，或 push 到 openwrt-qmodem-slim 分支
+# 产物：Artifacts 下载 openwrt-r3g-slim（含 sysupgrade.bin / factory.bin）
+name: Build OpenWrt R3G Slim + QModem + EasyTether
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ openwrt-qmodem-slim ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: 检出仓库（含 easytether-feed）
+        uses: actions/checkout@v4
+
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libncurses5-dev libncursesw5-dev zlib1g-dev \
+            gawk git gettext libssl-dev xsltproc wget unzip python3 \
+            python3-distutils file rsync ccache
+
+      - name: 加速 GitHub 访问（国内镜像）
+        run: |
+          git config --global url."https://ghfast.top/https://github.com/".insteadOf https://github.com/
+
+      - name: 克隆 OpenWrt 24.10 稳定版（精简底座）
+        run: |
+          git clone --depth 1 --branch openwrt-24.10 https://github.com/openwrt/openwrt openwrt
+          cd openwrt && git log --oneline -1
+
+      - name: 加入 QModem + EasyTether feed 并选最小包集
+        working-directory: openwrt
+        run: |
+          git clone --depth 1 https://github.com/FUjr/QModem qmodem-src
+          cp feeds.conf.default feeds.conf
+          grep -q "src-link qmodem" feeds.conf || \
+            echo "src-link qmodem $(pwd)/qmodem-src" >> feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # 内嵌 easytether 到 package 树，避开 24.10 对本地 src-link 纯文件包不选入镜像的坑
+          mkdir -p package/easytether-usb-tiny
+          cp -r "${{ github.workspace }}/easytether-feed/Makefile" package/easytether-usb-tiny/
+          cp -r "${{ github.workspace }}/easytether-feed/files" package/easytether-usb-tiny/
+          make defconfig
+          # 仅选中：设备 + 最小 LuCI + QModem + EasyTether + USB 驱动（不拉多余应用）
+          cat >> .config <<'EOF'
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt7621=y
+          CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3g=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-ssl=n
+          CONFIG_PACKAGE_qmodem=y
+          CONFIG_PACKAGE_luci-app-qmodem-next=y
+          CONFIG_PACKAGE_qmodem_INCLUDE_generic-qmi-wwan=y
+          CONFIG_PACKAGE_luci-i18n-qmodem-next-zh-cn=y
+          CONFIG_PACKAGE_easytether-usb-tiny=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
+          CONFIG_PACKAGE_kmod-usb2=y
+          EOF
+          make defconfig
+
+      - name: 下载源码
+        working-directory: openwrt
+        run: make -j$(nproc) download
+
+      - name: 编译（root 下强制 configure）
+        working-directory: openwrt
+        env:
+          FORCE_UNSAFE_CONFIGURE: 1
+        run: |
+          make -j$(nproc) || make -j1 V=s
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-r3g-slim
+          path: openwrt/bin/targets/ramips/mt7621/*
+          if-no-files-found: warn
