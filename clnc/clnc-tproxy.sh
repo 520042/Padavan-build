@@ -13,6 +13,7 @@
 #
 # 部署: /etc/storage/clnc/clnc-tproxy.sh
 # 用法: clnc-tproxy.sh [load|unload|status|watch]
+# 看门狗常驻(核心死自动摘规则 / 规则缺自动补挂): nohup clnc-tproxy.sh watch >/dev/null 2>&1 &
 # 注意: 本文件 LF 写入
 # ============================================================
 
