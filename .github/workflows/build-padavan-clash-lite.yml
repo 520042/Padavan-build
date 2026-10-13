@@ -109,6 +109,14 @@ jobs:
         grep -q 'clnc-tproxy.sh watch' /opt/payload/clnc-tproxy.sh || { echo "FATAL: clnc-tproxy.sh 缺看门狗"; exit 1; }
         grep -q 'is_run' /opt/payload/clnc-ctl || { echo "FATAL: clnc-ctl 内容异常"; exit 1; }
         echo "clnc 资产就绪: $(stat -c %s /opt/payload/clnc) bytes 二进制"
+        # EasyTether (musl shim + 二进制, 走仓库内文件, 与 yacd/clnc 同理)
+        mkdir -p /opt/payload/easytether
+        cp -rf "$GITHUB_WORKSPACE"/easytether-padavan/. /opt/payload/easytether/
+        for f in ld-musl-mipsel-sf.so.1 libgcc_s.so.1 easytether-usb easytether.sh; do
+          [ -s /opt/payload/easytether/$f ] || { echo "FATAL: easytether $f 缺失"; exit 1; }
+        done
+        grep -q 'ld-musl-mipsel-sf' /opt/payload/easytether/easytether.sh || { echo "FATAL: easytether 包装脚本异常"; exit 1; }
+        echo "EasyTether 资产就绪: $(stat -c %s /opt/payload/easytether/easytether-usb) bytes"
         ls -la /opt/payload/
 
     - name: Build MI-R3G (native WebUI + C patches + romfs injection)
@@ -209,6 +217,12 @@ jobs:
           "\tcp -f /opt/payload/clnc.html $(ROMFSDIR)/www2/clnc.html ; \\\n"
           "\tmkdir -p $(ROMFSDIR)/www2/cgi-bin ; \\\n"
           "\tcp -f /opt/payload/cgi_clnc $(ROMFSDIR)/www2/cgi-bin/clnc ; \\\n"
+          "\tmkdir -p $(ROMFSDIR)/usr/lib/easytether ; \\\n"
+          "\tcp -f /opt/payload/easytether/ld-musl-mipsel-sf.so.1 $(ROMFSDIR)/usr/lib/easytether/ld-musl-mipsel-sf.so.1 ; \\\n"
+          "\tcp -f /opt/payload/easytether/libgcc_s.so.1 $(ROMFSDIR)/usr/lib/easytether/libgcc_s.so.1 ; \\\n"
+          "\tcp -f /opt/payload/easytether/easytether-usb $(ROMFSDIR)/usr/lib/easytether/easytether-usb ; \\\n"
+          "\tcp -f /opt/payload/easytether/easytether.sh $(ROMFSDIR)/usr/bin/easytether ; \\\n"
+          "\tchmod 755 $(ROMFSDIR)/usr/lib/easytether/easytether-usb $(ROMFSDIR)/usr/bin/easytether ; \\\n"
           "\tchmod 755 $(ROMFSDIR)/usr/bin/clnc $(ROMFSDIR)/usr/bin/clnc-ctl $(ROMFSDIR)/usr/bin/clnc-tproxy.sh $(ROMFSDIR)/www2/cgi-bin/clnc ; \\\n"
           "\t$(MAKEARCH) -C vendors romfs.post"
         )
@@ -233,7 +247,7 @@ jobs:
         ls -la images/
         tools/mksquashfs_xz/unsquashfs -l images/ramdisk > /tmp/rd_list.txt 2>&1 || true
         PASS=1
-        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "www2/ui/index.html" "usr/share/clash/Country.mmdb" "www/Advanced_Clash_Content.asp" "www/Clash_action.asp" "usr/bin/clnc" "usr/bin/clnc-ctl" "usr/bin/clnc-tproxy.sh" "www/Advanced_Clnc_Content.asp" "www2/clnc.html" "www2/cgi-bin/clnc"; do
+        for f in "usr/bin/clash" "usr/bin/clash-ctl" "www2/index.html" "www2/cgi-bin/clash" "www2/ui/index.html" "usr/share/clash/Country.mmdb" "www/Advanced_Clash_Content.asp" "www/Clash_action.asp" "usr/bin/clnc" "usr/bin/clnc-ctl" "usr/bin/clnc-tproxy.sh" "www/Advanced_Clnc_Content.asp" "www2/clnc.html" "www2/cgi-bin/clnc "usr/lib/easytether/easytether-usb" "usr/lib/easytether/ld-musl-mipsel-sf.so.1" "usr/lib/easytether/libgcc_s.so.1" "usr/bin/easytether"; do
           grep -q "$f" /tmp/rd_list.txt || { echo "MISSING: $f"; PASS=0; }
         done
         [ "$PASS" = "1" ] || { echo "=== PAYLOAD MISSING ==="; exit 1; }
@@ -257,6 +271,8 @@ jobs:
         grep -q 'Access-Control-Allow-Origin' romfs/usr/bin/clnc-ctl || { echo "=== CLNC-CTL 缺 CORS ==="; exit 1; }
         grep -q 'panelboot' romfs/usr/bin/clnc-ctl || { echo "=== CLNC-CTL 缺 panelboot ==="; exit 1; }
         grep -q 'ClashConf' /tmp/sqx/www/state.js || true
+        grep -q 'ld-musl-mipsel-sf' romfs/usr/bin/easytether || { echo "=== EASYTETHER 包装脚本异常 ==="; exit 1; }
+        echo "=== EASYTETHER PAYLOAD VERIFIED (musl shim) ==="
         echo "=== NATIVE PAGE + MENU VERIFIED ==="
         # httpd 二进制必须含 clash ej 钩子(证明 C 补丁编进去了) — 硬失败, 不允许 WARN
         HTPATH=$(find romfs -type f -name httpd 2>/dev/null | head -1)
